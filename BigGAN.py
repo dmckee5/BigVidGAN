@@ -11,7 +11,7 @@ from torch.nn import Parameter as P
 
 import layers
 from sync_batchnorm import SynchronizedBatchNorm2d as SyncBatchNorm2d
-
+from convgru import ConvGRULinear
 
 # Architectures for G
 # Attention is passed in in the format '32_64' to mean applying an attention
@@ -53,7 +53,7 @@ def G_arch(ch=64, attention='64', ksize='333333', dilation='111111'):
 
 class Generator(nn.Module):
   def __init__(self, G_ch=64, dim_z=128, bottom_width=4, resolution=128,
-               G_kernel_size=3, G_attn='64', n_classes=1000,
+               G_kernel_size=3, G_attn='64', n_classes=1000, time_steps=12,
                num_G_SVs=1, num_G_SV_itrs=1,
                G_shared=True, shared_dim=0, hier=False,
                cross_replica=False, mybn=False,
@@ -78,6 +78,8 @@ class Generator(nn.Module):
     self.attention = G_attn
     # number of classes, for use in categorical conditional generation
     self.n_classes = n_classes
+    # xiaodan: The number of frames we want to generate
+    self.time_steps = time_steps
     # Use shared embeddings?
     self.G_shared = G_shared
     # Dimensionality of the shared embedding? Unused if not using G_shared
@@ -128,14 +130,15 @@ class Generator(nn.Module):
     else:
       self.which_conv = functools.partial(nn.Conv2d, kernel_size=3, padding=1)
       self.which_linear = nn.Linear
-      
+
     # We use a non-spectral-normed embedding here regardless;
     # For some reason applying SN to G's embedding seems to randomly cripple G
     self.which_embedding = nn.Embedding
     bn_linear = (functools.partial(self.which_linear, bias=False) if self.G_shared
                  else self.which_embedding)
-    self.which_bn = functools.partial(layers.ccbn,
+    self.which_bn = functools.partial(layers.ccbn5D, #xiaodan : changed by xiaodan
                           which_linear=bn_linear,
+                          time_steps = self.time_steps, #xiaodan: added by xiaodan
                           cross_replica=self.cross_replica,
                           mybn=self.mybn,
                           input_size=(self.shared_dim + self.z_chunk_size if self.G_shared
@@ -146,12 +149,24 @@ class Generator(nn.Module):
 
     # Prepare model
     # If not using shared embeddings, self.shared is just a passthrough
-    self.shared = (self.which_embedding(n_classes, self.shared_dim) if G_shared 
+    self.shared = (self.which_embedding(n_classes, self.shared_dim) if G_shared
                     else layers.identity())
     # First linear layer
     self.linear = self.which_linear(self.dim_z // self.num_slots,
                                     self.arch['in_channels'][0] * (self.bottom_width **2))
-
+    # xiaodan: convolutional GRU with linear transformation on top
+    self.convgru = ConvGRULinear(noise_size=self.dim_z+self.shared_dim, #xiaodan: not sure if shared_dim is the dim of y
+                                 ch0=self.arch['in_channels'][0], # xiaodan: not sure if this is ch0
+                                 time_steps=self.time_steps,
+                                 input_size=(self.bottom_width,self.bottom_width),
+                                 hidden_dim=self.arch['in_channels'][0], # xiaodan: hidden_dim is also output dimension, which should alse be ch0
+                                 kernel_size=(3,3),
+                                 num_layers=1,
+                                 dtype=torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
+    # xiaodan: full-attn layers
+    self.fullAttn = layers.FullAttention(ch=self.arch['in_channels'][0], # xiaodan: not sure if this is ch0
+                                         time_steps=self.time_steps,
+                                         which_conv = self.which_conv)
     # self.blocks is a doubly-nested list of modules, the outer loop intended
     # to be over blocks at a given resolution (resblocks and/or self-attention)
     # while the inner loop is over a given block
@@ -167,8 +182,11 @@ class Generator(nn.Module):
 
       # If attention on this block, attach it to the end
       if self.arch['attention'][self.arch['resolution'][index]]:
-        print('Adding attention layer in G at resolution %d' % self.arch['resolution'][index])
-        self.blocks[-1] += [layers.Attention(self.arch['out_channels'][index], self.which_conv)]
+        # xiaodan: add three seperable attention layers in G at certain resolution
+        print('Adding seperable attention layer in G at resolution %d' % self.arch['resolution'][index])
+        self.blocks[-1] += [layers.SelfAttention_width(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+        self.blocks[-1] += [layers.SelfAttention_height(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+        self.blocks[-1] += [layers.SelfAttention_time(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
 
     # Turn self.blocks into a ModuleList so that it's all properly registered.
     self.blocks = nn.ModuleList([nn.ModuleList(block) for block in self.blocks])
@@ -209,8 +227,8 @@ class Generator(nn.Module):
   def init_weights(self):
     self.param_count = 0
     for module in self.modules():
-      if (isinstance(module, nn.Conv2d) 
-          or isinstance(module, nn.Linear) 
+      if (isinstance(module, nn.Conv2d)
+          or isinstance(module, nn.Linear)
           or isinstance(module, nn.Embedding)):
         if self.init == 'ortho':
           init.orthogonal_(module.weight)
@@ -235,20 +253,23 @@ class Generator(nn.Module):
       ys = [torch.cat([y, item], 1) for item in zs[1:]]
     else:
       ys = [y] * len(self.blocks)
-      
+    # xiaodan: concatenate z and y, then send into convgru
+    zy = torch.cat((z,y),1)
     # First linear layer
-    h = self.linear(z)
-    # Reshape
-    h = h.view(h.size(0), -1, self.bottom_width, self.bottom_width)
-    
+    layer_output_list, last_state_list = self.convgru(zy)
+    h = layer_output_list[-1] #[B,T,C,H,W]
+    #xiaodan: send h into full Attention
+    h=h.view(-1,*h.shape[2:]) #[BT,C,H,W]
+    h = self.fullAttn(h)#[BT,C,H,W]
+
     # Loop over blocks
     for index, blocklist in enumerate(self.blocks):
       # Second inner loop in case block has multiple layers
       for block in blocklist:
-        h = block(h, ys[index])
-        
+        h = block(h, ys[index]) #[BT,C,H,W]
+
     # Apply batchnorm-relu-conv-tanh at output
-    return torch.tanh(self.output_layer(h))
+    return torch.tanh(self.output_layer(h)).contiguous().view(-1,self.time_steps,*h.shape[1:]) #[B,T,C,H,W]
 
 
 # Discriminator architecture, same paradigm as G's above
@@ -412,7 +433,7 @@ class G_D(nn.Module):
     self.D = D
 
   def forward(self, z, gy, x=None, dy=None, train_G=False, return_G_z=False,
-              split_D=False):              
+              split_D=False):
     # If training G, enable grad tape
     with torch.set_grad_enabled(train_G):
       # Get Generator output given noise
