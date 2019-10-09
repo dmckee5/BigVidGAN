@@ -13,6 +13,7 @@ import layers
 from sync_batchnorm import SynchronizedBatchNorm2d as SyncBatchNorm2d
 from convgru import ConvGRULinear
 
+
 # Architectures for G
 # Attention is passed in in the format '32_64' to mean applying an attention
 # block at both resolution 32x32 and 64x64. Just '64' will apply at 64x64.
@@ -52,6 +53,7 @@ def G_arch(ch=64, attention='64', ksize='333333', dilation='111111'):
   return arch
 
 class Generator(nn.Module):
+  #xiaodan: time_steps added by xiaodan
   def __init__(self, G_ch=64, dim_z=128, bottom_width=4, resolution=128,
                G_kernel_size=3, G_attn='64', n_classes=1000, time_steps=12,
                num_G_SVs=1, num_G_SV_itrs=1,
@@ -136,9 +138,10 @@ class Generator(nn.Module):
     self.which_embedding = nn.Embedding
     bn_linear = (functools.partial(self.which_linear, bias=False) if self.G_shared
                  else self.which_embedding)
-    self.which_bn = functools.partial(layers.ccbn5D, #xiaodan : changed by xiaodan
+    #xiaodan : ccbn changed by xiaodan to ccbn5D; time_steps added by xiaodan
+    self.which_bn = functools.partial(layers.ccbn5D,
                           which_linear=bn_linear,
-                          time_steps = self.time_steps, #xiaodan: added by xiaodan
+                          time_steps = self.time_steps,
                           cross_replica=self.cross_replica,
                           mybn=self.mybn,
                           input_size=(self.shared_dim + self.z_chunk_size if self.G_shared
@@ -155,18 +158,24 @@ class Generator(nn.Module):
     self.linear = self.which_linear(self.dim_z // self.num_slots,
                                     self.arch['in_channels'][0] * (self.bottom_width **2))
     # xiaodan: convolutional GRU with linear transformation on top
-    self.convgru = ConvGRULinear(noise_size=self.dim_z+self.shared_dim, #xiaodan: not sure if shared_dim is the dim of y
-                                 ch0=self.arch['in_channels'][0], # xiaodan: not sure if this is ch0
+    #xiaodan: for noise_size, not sure if shared_dim is the dim of y
+    # xiaodan: not sure if ch0 should be self.arch['in_channels'][0]
+    # xiaodan: hidden_dim is also output dimension, which should alse be ch0
+    # print('dim_z:',self.dim_z,'shared_dim:',self.shared_dim)
+    self.convgru = ConvGRULinear(noise_size=self.dim_z+self.shared_dim,
+                                 ch0=self.arch['in_channels'][0],
                                  time_steps=self.time_steps,
                                  input_size=(self.bottom_width,self.bottom_width),
-                                 hidden_dim=self.arch['in_channels'][0], # xiaodan: hidden_dim is also output dimension, which should alse be ch0
+                                 hidden_dim=self.arch['in_channels'][0],
                                  kernel_size=(3,3),
                                  num_layers=1,
-                                 dtype=torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
+                                 dtype=torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor,
+                                 batch_first=True)
     # xiaodan: full-attn layers
-    self.fullAttn = layers.FullAttention(ch=self.arch['in_channels'][0], # xiaodan: not sure if this is ch0
-                                         time_steps=self.time_steps,
-                                         which_conv = self.which_conv)
+    # xiaodan: not sure if this is ch0
+    self.fullAttn = layers.FullAttention(ch=self.arch['in_channels'][0],
+                                         time_steps=self.time_steps)
+                                         # which_conv = self.which_conv) #xiaodan: commented by xiaodan to use the default SNConv3d
     # self.blocks is a doubly-nested list of modules, the outer loop intended
     # to be over blocks at a given resolution (resblocks and/or self-attention)
     # while the inner loop is over a given block
@@ -253,27 +262,34 @@ class Generator(nn.Module):
       ys = [torch.cat([y, item], 1) for item in zs[1:]]
     else:
       ys = [y] * len(self.blocks)
+    # print(z.shape,y.shape)
     # xiaodan: concatenate z and y, then send into convgru
     zy = torch.cat((z,y),1)
+    # print('dim zy:',zy.shape)
     # First linear layer
     layer_output_list, last_state_list = self.convgru(zy)
     h = layer_output_list[-1] #[B,T,C,H,W]
+    # print('H shape after convgru',h.shape)
     #xiaodan: send h into full Attention
-    h=h.view(-1,*h.shape[2:]) #[BT,C,H,W]
-    h = self.fullAttn(h)#[BT,C,H,W]
 
+    h = self.fullAttn(h)#[B,T,C,H,W]
+    h = h.contiguous().view(-1,*h.shape[2:]) #[BT,C,H,W]
     # Loop over blocks
     for index, blocklist in enumerate(self.blocks):
       # Second inner loop in case block has multiple layers
       for block in blocklist:
-        h = block(h, ys[index]) #[BT,C,H,W]
+        ys_BT = ys[index].repeat(self.time_steps,1,1).permute(1,0,2).contiguous().view(-1,y.shape[-1])
+        # print('y and ys_BT shape',y.shape,ys_BT.shape)
+        h = block(h, ys_BT) #[BT,C,H,W]
+        print('ys_BT', ys_BT.get_device())
+        print('h', h.get_device())
 
     # Apply batchnorm-relu-conv-tanh at output
-    return torch.tanh(self.output_layer(h)).contiguous().view(-1,self.time_steps,*h.shape[1:]) #[B,T,C,H,W]
+    return torch.tanh(self.output_layer(h)).contiguous().view(-1,self.time_steps,3,*h.shape[2:]) #[B,T,3,H,W]
 
 
 # Discriminator architecture, same paradigm as G's above
-def D_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
+def D_img_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
   arch = {}
   arch[256] = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8, 8, 16]],
                'out_channels' : [item * ch for item in [1, 2, 4, 8, 8, 16, 16]],
@@ -301,7 +317,35 @@ def D_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
                               for i in range(2,6)}}
   return arch
 
-class Discriminator(nn.Module):
+def D_vid_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
+  arch = {}
+  arch[256] = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8, 8, 16]],
+               'out_channels' : [item * ch for item in [1, 2, 4, 8, 8, 16, 16]],
+               'downsample' : [True] * 6 + [False],
+               'resolution' : [128, 64, 32, 16, 8, 4, 4 ],
+               'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
+                              for i in range(2,8)}}
+  arch[128] = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8, 16]],
+               'out_channels' : [item * ch for item in [1, 2, 4, 8, 16, 16]],
+               'downsample' : [True] * 5 + [False],
+               'resolution' : [64, 32, 16, 8, 4, 4],
+               'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
+                              for i in range(2,8)}}
+  arch[64]  = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8]],
+               'out_channels' : [item * ch for item in [1, 2, 4, 8, 16]],
+               'downsample' : [True] * 4 + [False],
+               'resolution' : [32, 16, 8, 4, 4],
+               'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
+                              for i in range(2,7)}}
+  arch[32]  = {'in_channels' :  [3] + [item * ch for item in [4, 4, 4]],
+               'out_channels' : [item * ch for item in [4, 4, 4, 4]],
+               'downsample' : [True, True, False, False],
+               'resolution' : [16, 16, 16, 16],
+               'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
+                              for i in range(2,6)}}
+  return arch
+
+class ImageDiscriminator(nn.Module):
 
   def __init__(self, D_ch=64, D_wide=True, resolution=128,
                D_kernel_size=3, D_attn='64', n_classes=1000,
@@ -309,7 +353,131 @@ class Discriminator(nn.Module):
                D_lr=2e-4, D_B1=0.0, D_B2=0.999, adam_eps=1e-8,
                SN_eps=1e-12, output_dim=1, D_mixed_precision=False, D_fp16=False,
                D_init='ortho', skip_init=False, D_param='SN', **kwargs):
-    super(Discriminator, self).__init__()
+    super(ImageDiscriminator, self).__init__()
+    # Width multiplier
+    self.ch = D_ch
+    # Use Wide D as in BigGAN and SA-GAN or skinny D as in SN-GAN?
+    self.D_wide = D_wide
+    # Resolution
+    self.resolution = resolution
+    # Kernel size
+    self.kernel_size = D_kernel_size
+    # Attention?
+    self.attention = D_attn
+    # Number of classes
+    self.n_classes = n_classes
+    # Activation
+    self.activation = D_activation
+    # Initialization style
+    self.init = D_init
+    # Parameterization style
+    self.D_param = D_param
+    # Epsilon for Spectral Norm?
+    self.SN_eps = SN_eps
+    # Fp16?
+    self.fp16 = D_fp16
+    # Architecture
+    self.arch = D_img_arch(self.ch, self.attention)[resolution]
+
+    # Which convs, batchnorms, and linear layers to use
+    # No option to turn off SN in D right now
+    if self.D_param == 'SN':
+      self.which_conv = functools.partial(layers.SNConv2d,
+                          kernel_size=3, padding=1,
+                          num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
+                          eps=self.SN_eps)
+      self.which_linear = functools.partial(layers.SNLinear,
+                          num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
+                          eps=self.SN_eps)
+      self.which_embedding = functools.partial(layers.SNEmbedding,
+                              num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
+                              eps=self.SN_eps)
+    # Prepare model
+    # self.blocks is a doubly-nested list of modules, the outer loop intended
+    # to be over blocks at a given resolution (resblocks and/or self-attention)
+    self.blocks = []
+    for index in range(len(self.arch['out_channels'])):
+      self.blocks += [[layers.DBlock(in_channels=self.arch['in_channels'][index],
+                       out_channels=self.arch['out_channels'][index],
+                       which_conv=self.which_conv,
+                       wide=self.D_wide,
+                       activation=self.activation,
+                       preactivation=(index > 0),
+                       downsample=(nn.AvgPool2d(2) if self.arch['downsample'][index] else None))]]
+      # If attention on this block, attach it to the end
+      if self.arch['attention'][self.arch['resolution'][index]]:
+        print('Adding attention layer in D at resolution %d' % self.arch['resolution'][index])
+        self.blocks[-1] += [layers.Attention(self.arch['out_channels'][index],
+                                             self.which_conv)]
+    # Turn self.blocks into a ModuleList so that it's all properly registered.
+    self.blocks = nn.ModuleList([nn.ModuleList(block) for block in self.blocks])
+    # Linear output layer. The output dimension is typically 1, but may be
+    # larger if we're e.g. turning this into a VAE with an inference output
+    self.linear = self.which_linear(self.arch['out_channels'][-1], output_dim)
+    # Embedding for projection discrimination
+    self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1])
+
+    # Initialize weights
+    if not skip_init:
+      self.init_weights()
+
+    # Set up optimizer
+    self.lr, self.B1, self.B2, self.adam_eps = D_lr, D_B1, D_B2, adam_eps
+    if D_mixed_precision:
+      print('Using fp16 adam in D...')
+      import utils
+      self.optim = utils.Adam16(params=self.parameters(), lr=self.lr,
+                             betas=(self.B1, self.B2), weight_decay=0, eps=self.adam_eps)
+    else:
+      self.optim = optim.Adam(params=self.parameters(), lr=self.lr,
+                             betas=(self.B1, self.B2), weight_decay=0, eps=self.adam_eps)
+    # LR scheduling, left here for forward compatibility
+    # self.lr_sched = {'itr' : 0}# if self.progressive else {}
+    # self.j = 0
+
+  # Initialize
+  def init_weights(self):
+    self.param_count = 0
+    for module in self.modules():
+      if (isinstance(module, nn.Conv2d)
+          or isinstance(module, nn.Linear)
+          or isinstance(module, nn.Embedding)):
+        if self.init == 'ortho':
+          init.orthogonal_(module.weight)
+        elif self.init == 'N02':
+          init.normal_(module.weight, 0, 0.02)
+        elif self.init in ['glorot', 'xavier']:
+          init.xavier_uniform_(module.weight)
+        else:
+          print('Init style not recognized...')
+        self.param_count += sum([p.data.nelement() for p in module.parameters()])
+    print('Param count for D''s initialized parameters: %d' % self.param_count)
+
+  def forward(self, x, y=None):
+    # Stick x into h for cleaner for loops without flow control
+    h = x
+    # Loop over blocks
+    for index, blocklist in enumerate(self.blocks):
+      for block in blocklist:
+        h = block(h)
+    # Apply global sum pooling as in SN-GAN
+    h = torch.sum(self.activation(h), [2, 3])
+    # Get initial class-unconditional output
+    out = self.linear(h)
+    print('out', out.get_device())
+    # Get projection of final featureset onto class vectors and add to evidence
+    out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
+    return out
+
+class VideoDiscriminator(nn.Module):
+
+  def __init__(self, D_ch=64, D_wide=True, resolution=128,
+               D_kernel_size=3, D_attn='64', n_classes=1000,
+               num_D_SVs=1, num_D_SV_itrs=1, D_activation=nn.ReLU(inplace=False),
+               D_lr=2e-4, D_B1=0.0, D_B2=0.999, adam_eps=1e-8,
+               SN_eps=1e-12, output_dim=1, D_mixed_precision=False, D_fp16=False,
+               D_init='ortho', skip_init=False, D_param='SN', **kwargs):
+    super(VideoDiscriminator, self).__init__()
     # Width multiplier
     self.ch = D_ch
     # Use Wide D as in BigGAN and SA-GAN or skinny D as in SN-GAN?
@@ -424,48 +592,67 @@ class Discriminator(nn.Module):
     out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
     return out
 
+
 # Parallelized G_D to minimize cross-gpu communication
 # Without this, Generator outputs would get all-gathered and then rebroadcast.
 class G_D(nn.Module):
-  def __init__(self, G, D):
+  def __init__(self, G, D, k=8):
     super(G_D, self).__init__()
     self.G = G
     self.D = D
-
+    self.k = k
+    print('self.k',self.k)
   def forward(self, z, gy, x=None, dy=None, train_G=False, return_G_z=False,
               split_D=False):
+    # print('z shape in GD before with:',z.shape)
     # If training G, enable grad tape
     with torch.set_grad_enabled(train_G):
       # Get Generator output given noise
-      G_z = self.G(z, self.G.shared(gy))
+      # print('Entering G in GD')
+      # print('z shape in GD:',z.shape)
+      # print('G.shared(gy) shape:',self.G.shared(gy).shape)
+      G_z = self.G(z, self.G.shared(gy)) #xiaodan: G_z:[B,T,C,H,W]
+      # print('Left G in GD')
       # Cast as necessary
       if self.G.fp16 and not self.D.fp16:
         G_z = G_z.float()
       if self.D.fp16 and not self.G.fp16:
         G_z = G_z.half()
+    #xiaodan: need to sample for k frames
+    import utils
+    sampled_G_z,sampled_gy = utils.sample_frames(G_z,gy,self.k) # [B,8,C,H,W], [B,8,120]
+    sampled_G_z = sampled_G_z.contiguous().view(-1,*G_z.shape[2:])# [B*8,C,H,W]
+    sampled_gy = sampled_gy.contiguous().view(-1,*gy.shape[2:]) # [B*8,120]
+    if x is not None and dy is not None:
+      # print('x and dy shape',x.shape,dy.shape)
+      sampled_x, sampled_dy = utils.sample_frames(x,dy,self.k) # [B,8,C,H,W], [B,8,120]
+      sampled_x = sampled_x.contiguous().view(-1,*x.shape[2:])# [B*8,C,H,W]
+      sampled_dy = sampled_dy.contiguous().view(-1,*dy.shape[2:]) # [B*8,120]
+
     # Split_D means to run D once with real data and once with fake,
     # rather than concatenating along the batch dimension.
     if split_D:
-      D_fake = self.D(G_z, gy)
+      D_fake = self.D(sampled_G_z, sampled_gy)
       if x is not None:
-        D_real = self.D(x, dy)
+        D_real = self.D(sampled_x, sampled_dy)
         return D_fake, D_real
       else:
         if return_G_z:
-          return D_fake, G_z
+          return D_fake, sampled_G_z
         else:
           return D_fake
     # If real data is provided, concatenate it with the Generator's output
     # along the batch dimension for improved efficiency.
     else:
-      D_input = torch.cat([G_z, x], 0) if x is not None else G_z
-      D_class = torch.cat([gy, dy], 0) if dy is not None else gy
+
+      D_input = torch.cat([sampled_G_z, sampled_x], 0) if x is not None else sampled_G_z
+      D_class = torch.cat([sampled_gy, sampled_dy], 0) if dy is not None else sampled_gy
       # Get Discriminator output
       D_out = self.D(D_input, D_class)
       if x is not None:
-        return torch.split(D_out, [G_z.shape[0], x.shape[0]]) # D_fake, D_real
+        return torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]]) # D_fake, D_real
       else:
         if return_G_z:
-          return D_out, G_z
+          return D_out, sampled_G_z
         else:
           return D_out

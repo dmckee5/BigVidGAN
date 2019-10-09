@@ -150,8 +150,8 @@ class SNEmbedding(nn.Embedding, SN):
 
 
 class FullAttention(nn.Module):
-  def __init__(self, ch, time_steps, which_conv=SNConv2d, name='full_attention'):
-    super(FullAttention, self).__init__()  #assume input tensor as (BT, C, W, H)
+  def __init__(self, ch, time_steps, which_conv=SNConv3d, name='full_attention'):
+    super(FullAttention, self).__init__()  #assume input tensor as (B,T, C, H, W)
     # Channel multiplier
     self.ch = ch
     self.T = time_steps
@@ -163,21 +163,28 @@ class FullAttention(nn.Module):
     # Learnable gain parameter
     self.gamma = P(torch.tensor(0.), requires_grad=True)
   def forward(self, x, y=None):
+    # xiaodan: x = [B,T,C,H,W]
     # Apply convs
-    theta = self.theta(x)
-    phi = self.phi(x).contiguous().view(-1, self.T, self.ch//8, x.shape[2], x.shape[3]).permute(0, 2, 1, 3, 4)
-    g = self.g(x).contiguous().view(-1, self.T, self.ch//2, x.shape[2], x.shape[3]).permute(0, 2, 1, 3, 4)
+    # xiaodan: y = [B,C,T,H,W]
+    y = x.permute(0, 2, 1, 3, 4)
+    theta = self.theta(y) # [B,C//8, T,H,W]
+    # print('theta shape',theta.shape)
+    # phi = self.phi(x).contiguous().view(-1, self.T, self.ch//8, x.shape[2], x.shape[3]).permute(0, 2, 1, 3, 4)
+    phi = self.phi(y) # [B,C//8, T,H,W]
+    # g = self.g(x).contiguous().view(-1, self.T, self.ch//2, x.shape[2], x.shape[3]).permute(0, 2, 1, 3, 4)
+    g = self.g(y)# [B,C//2, T,H,W]
     # Perform reshapes
-    theta = theta.contiguous().view(-1, self.T, self.ch//8, x.shape[2], x.shape[3])
-    theta.permute(0, 2, 1, 3, 4)
-    theta = theta.contiguous().view(-1, self.ch//8, self.T*x.shape[2]*x.shape[3])
-    phi = phi.contiguous().view(-1, self.ch//8, self.T*x.shape[2]*x.shape[3])
-    g = g.contiguous().view(-1, self.ch//2, self.T*x.shape[2]*x.shape[3])
+    # theta = theta.contiguous().view(-1, self.T, self.ch//8, x.shape[2], x.shape[3])
+    # theta.permute(0, 2, 1, 3, 4)
+    # print('ch//8 and T,H,W:',self.ch//8,self.T,x.shape[3],x.shape[4])
+    theta = theta.contiguous().view(-1, self.ch//8, self.T*x.shape[3]*x.shape[4]) #[B,C//8, THW]
+    phi = phi.contiguous().view(-1, self.ch//8, self.T*x.shape[3]*x.shape[4])#[B,C//8, THW]
+    g = g.contiguous().view(-1, self.ch//2, self.T*x.shape[3]*x.shape[4])#[B,C//2, THW]
     # Matmul and softmax to get attention maps
-    beta = F.softmax(torch.bmm(theta.transpose(1, 2), phi), -1)
+    beta = F.softmax(torch.bmm(theta.transpose(1, 2), phi), -1) # [B, THW, |THW|]
     # Attention map times g path
-    o = self.o(torch.bmm(g, beta.transpose(1,2)).contiguous().view(-1, self.ch // 2, self.T, x.shape[2], x.shape[3]))
-    return self.gamma * o + x
+    o = self.o(torch.bmm(g, beta.transpose(1,2)).contiguous().view(-1, self.ch // 2, self.T, x.shape[3], x.shape[4])).permute(0,2,1,3,4)
+    return self.gamma * o + x #[B,T,C,W,H]
 
 # A non-local block as used in SA-GAN
 # Note that the implementation as described in the paper is largely incorrect;
@@ -211,7 +218,7 @@ class Attention(nn.Module):
 
 class SelfAttention_width(nn.Module):# Assume [B,T,C,H,W]
   def __init__(self, ch, time_steps,which_conv=SNConv2d, name='attention_width'):
-    super(Attention, self).__init__()
+    super(SelfAttention_width, self).__init__()
     # Channel multiplier
     self.ch = ch
     self.T = time_steps
@@ -229,25 +236,25 @@ class SelfAttention_width(nn.Module):# Assume [B,T,C,H,W]
     phi = self.phi(x)
     g = self.g(x)
     # Perform reshapes
-    theta = theta.contiguous().view(-1,self.T,*x.shape[1:])
+    theta = theta.contiguous().view(-1,self.T,self.ch//8,*x.shape[2:])
     theta = theta.permute(0,1,3,2,4)
     theta = theta.contiguous().view(-1, self. ch // 8, x.shape[3]) #[BTH,C//8,W]
-    phi = phi.contiguous().view(-1,self.T,*x.shape[1:])
+    phi = phi.contiguous().view(-1,self.T,self.ch//8,*x.shape[2:])
     phi = phi.permute(0,1,3,2,4)
     phi = phi.contiguous().view(-1, self. ch // 8,x.shape[3]) # [BTH,C//8,W]
-    g = g.contiguous().view(-1,self.T,*x.shape[1:])
+    g = g.contiguous().view(-1,self.T,self.ch//2,*x.shape[2:])
     g = g.permute(0,1,3,2,4)
     g = g.contiguous().view(-1, self. ch // 2, x.shape[3]) # [BTH,C//2,W]
     # Matmul and softmax to get attention maps
     beta = F.softmax(torch.bmm(theta.transpose(1, 2), phi), -1)
     # Attention map times g path
     attn_g = torch.bmm(g, beta.transpose(1,2)).contiguous().view(-1, self.T, x.shape[2],self.ch // 2, x.shape[3]).permute(0,1,3,2,4)
-    o = self.o(attn_g.contiguous().view(*x.shape))
+    o = self.o(attn_g.contiguous().view(-1,self.ch//2,*x.shape[2:]))
     return self.gamma * o + x
 
 class SelfAttention_height(nn.Module):# Assume [B,T,C,H,W]
   def __init__(self, ch, time_steps,which_conv=SNConv2d, name='attention_height'):
-    super(Attention, self).__init__()
+    super(SelfAttention_height, self).__init__()
     # Channel multiplier
     self.ch = ch
     self.T = time_steps
@@ -265,25 +272,25 @@ class SelfAttention_height(nn.Module):# Assume [B,T,C,H,W]
     phi = self.phi(x)
     g = self.g(x)
     # Perform reshapes
-    theta = theta.contiguous().contiguous().view(-1,self.T,*x.shape[1:]) #[B,T,C,H,W]
+    theta = theta.contiguous().view(-1,self.T,self.ch//8,*x.shape[2:]) #[B,T,C//8,H,W]
     theta = theta.permute(0,1,4,2,3) #[B,T,W,C,H]
-    theta = theta.contiguous().contiguous().view(-1, self. ch // 8, x.shape[2]) #[BTW,C//8,H]
-    phi = phi.contiguous().contiguous().view(-1,self.T,*x.shape[1:])#[B,T,C,H,W]
+    theta = theta.contiguous().view(-1, self. ch // 8, x.shape[2]) #[BTW,C//8,H]
+    phi = phi.contiguous().view(-1,self.T,self.ch//8,*x.shape[2:])#[B,T,C//8,H,W]
     phi = phi.permute(0,1,4,2,3) #[B,T,W,C,H]
-    phi = phi.contiguous().contiguous().view(-1, self. ch // 8,x.shape[2]) #[BTW,C//8,H]
-    g = g.contiguous().contiguous().view(-1,self.T,*x.shape[1:])#[B,T,C,H,W]
+    phi = phi.contiguous().view(-1, self. ch // 8,x.shape[2]) #[BTW,C//8,H]
+    g = g.contiguous().view(-1,self.T,self.ch//2,*x.shape[2:])#[B,T,C//2,H,W]
     g = g.permute(0,1,4,2,3)#[B,T,W,C,H]
-    g = g.contiguous().contiguous().view(-1, self. ch // 2, x.shape[2]) # [BTW,C//2,H]
+    g = g.contiguous().view(-1, self. ch // 2, x.shape[2]) # [BTW,C//2,H]
     # Matmul and softmax to get attention maps
     beta = F.softmax(torch.bmm(theta.transpose(1, 2), phi), -1)#[BTW,H,|H|]
     # Attention map times g path
-    attn_g = torch.bmm(g, beta.transpose(1,2)).contiguous().contiguous().view(-1, self.T, x.shape[3],self.ch // 2, x.shape[2]).permute(0,1,3,4,2) #[B,T,C,H,W]
-    o = self.o(attn_g.contiguous().contiguous().view(*x.shape))# [BT,C,H,W]
+    attn_g = torch.bmm(g, beta.transpose(1,2)).contiguous().view(-1, self.T, x.shape[3],self.ch // 2, x.shape[2]).permute(0,1,3,4,2) #[B,T,C,H,W]
+    o = self.o(attn_g.contiguous().view(-1,self.ch//2,*x.shape[2:]))# [BT,C,H,W]
     return self.gamma * o + x
 
 class SelfAttention_time(nn.Module):# Assume [B,T,C,H,W]
   def __init__(self, ch, time_steps,which_conv=SNConv2d, name='attention_time'):
-    super(Attention, self).__init__()
+    super(SelfAttention_time, self).__init__()
     # Channel multiplier
     self.ch = ch
     self.T = time_steps
@@ -301,20 +308,20 @@ class SelfAttention_time(nn.Module):# Assume [B,T,C,H,W]
     phi = self.phi(x) #[BT,C//8,H,W]
     g = self.g(x) #[BT,C//2,H,W]
     # Perform reshapes
-    theta = theta.contiguous().view(-1,self.T,*x.shape[1:]) #[B,T,C//8,H,W]
+    theta = theta.contiguous().view(-1,self.T,self.ch//8,*x.shape[2:]) #[B,T,C//8,H,W]
     theta = theta.permute(0,3,4,2,1) #[B,H,W,C//8,T]
     theta = theta.contiguous().view(-1, self. ch // 8, self.T) #[BHW,C//8,T]
-    phi = phi.contiguous().view(-1,self.T,*x.shape[1:])#[B,T,C//8,H,W]
+    phi = phi.contiguous().view(-1,self.T,self.ch//8,*x.shape[2:])#[B,T,C//8,H,W]
     phi = phi.permute(0,3,4,2,1) #[B,H,W,C//8,T]
     phi = phi.contiguous().view(-1, self. ch // 8,self.T) #[BHW,C//8,T]
-    g = g.contiguous().view(-1,self.T,*x.shape[1:])#[B,T,C,H,W]
+    g = g.contiguous().view(-1,self.T,self.ch//2,*x.shape[2:])#[B,T,C,H,W]
     g = g.permute(0,3,4,2,1)#[B,H,W,C//2,T]
     g = g.contiguous().view(-1, self. ch // 2, self.T) # [BHW,C//2,T]
     # Matmul and softmax to get attention maps
     beta = F.softmax(torch.bmm(theta.transpose(1, 2), phi), -1)#[BHW,T,|T|]
     # Attention map times g path
-    attn_g = torch.bmm(g, beta.transpose(1,2)).contiguous().view(-1, x.shape[2], x.shape[3],self.ch // 2, self.T).permute(0,4,3,1,2) #[B,T,C,H,W]
-    o = self.o(attn_g.contiguous().view(*x.shape))# [BT,C,H,W]
+    attn_g = torch.bmm(g, beta.transpose(1,2)).contiguous().view(-1, x.shape[2], x.shape[3],self.ch // 2, self.T).permute(0,4,3,1,2) #[B,T,C//2,H,W]
+    o = self.o(attn_g.contiguous().view(-1,self.ch//2,*x.shape[2:]))# [BT,C,H,W]
     return self.gamma * o + x
 
 # Fused batchnorm op
@@ -482,7 +489,7 @@ class ccbn(nn.Module):
 class ccbn5D(nn.Module):
   def __init__(self, output_size, input_size, which_linear, time_steps, eps=1e-5, momentum=0.1,
                cross_replica=False, mybn=False, norm_style='bn',):
-    super(ccbn, self).__init__()
+    super(ccbn5D, self).__init__()
     self.output_size, self.input_size = output_size, input_size
     # Prepare gain and bias layers
     self.gain = which_linear(input_size, output_size)
@@ -513,13 +520,15 @@ class ccbn5D(nn.Module):
     x_TC = x.contiguous().view(-1,self.time_steps,*x.shape[1:]).contiguous()\
                                             .view(x.shape[0],-1,*x.shape[2:])
     # Calculate class-conditional gains and biases
+    # print('input and output size',self.input_size,self.output_size)
+    # print('y shape',y.shape)
     gain = (1 + self.gain(y)).view(y.size(0), -1, 1, 1)
     bias = self.bias(y).view(y.size(0), -1, 1, 1)
+    # print('gain and bias shapes:',gain.shape,bias.shape)
     # If using my batchnorm
     if self.mybn or self.cross_replica:
-      return self.bn(x_TC, gain=gain, bias=bias).contiguous()\ # [B,TC,H,W]
-                .view(-1,self.time_steps,*x.shape[1:])\ # [B,T,C,H,W]
-                .contiguous().view(*x.shape)  # [BT,C,H,W]
+      return self.bn(x_TC, gain=gain, bias=bias).contiguous().view(-1,self.time_steps,*x.shape[1:]).contiguous().view(*x.shape)
+                                            # [B,TC,H,W]             # [B,T,C,H,W]                  # [BT,C,H,W]
     # else:
     else:
       if self.norm_style == 'bn':
@@ -532,9 +541,12 @@ class ccbn5D(nn.Module):
         out = groupnorm(x_TC, self.normstyle)
       elif self.norm_style == 'nonorm':
         out = x_TC
-      return out.contiguous()\ # [B,TC,H,W]
-                .view(-1,self.time_steps,*x.shape[1:])\ # [B,T,C,H,W]
-                .contiguous().view(*x.shape) * gain + bias\  # [BT,C,H,W]
+
+      # print('out shape',out.shape)
+      # print('x shape',x.shape)
+      out  = out.contiguous().view(-1,self.time_steps,*x.shape[1:]) # [B,T,C,H,W]
+      return out.contiguous().view(*x.shape) * gain + bias # [BT,C,H,W]
+
   def extra_repr(self):
     s = 'out: {output_size}, in: {input_size},'
     s +=' cross_replica={cross_replica}'
@@ -669,3 +681,4 @@ class DBlock(nn.Module):
     return h + self.shortcut(x)
 
 # dogball
+#test

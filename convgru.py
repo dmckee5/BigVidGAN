@@ -41,7 +41,9 @@ class ConvGRUCell(nn.Module):
                               bias=self.bias)
 
     def init_hidden(self, batch_size):
-        return (Variable(torch.zeros(batch_size, self.hidden_dim, self.height, self.width)).type(self.dtype))
+        hidden_state = Variable(torch.zeros(batch_size, self.hidden_dim, self.height, self.width)).type(self.dtype)
+        # print("hidden state's device", hidden_state.get_device())
+        return hidden_state
 
     def forward(self, input_tensor, h_cur):
         """
@@ -162,6 +164,8 @@ class ConvGRU(nn.Module):
 
             layer_output = torch.stack(output_inner, dim=1)
             cur_layer_input = layer_output
+            # print("output tensor's  device: ", layer_output.get_device())
+
 
             layer_output_list.append(layer_output)
             last_state_list.append([h])
@@ -207,9 +211,12 @@ class ConvGRULinear(nn.Module):
                                 batch_first=batch_first,
                                 bias = bias,
                                 return_all_layers = return_all_layers)
-        self.linear = nn.Linear(noise_size, ch0*input_size[0]*input_size[1],bias=linearBias)
+        self.linear = nn.Linear(noise_size, self.ch0*self.input_size[0]*self.input_size[1],bias=linearBias)
     def forward(self, input_vectors):
         output_vectors=self.linear(input_vectors)
+        # print('ch0,input_size',self.ch0,self.input_size)
+        # print('output vectors shape', output_vectors.shape)
         input_features=(output_vectors.view(-1,self.ch0,*self.input_size)).repeat(self.time,1,1,1,1).permute(1,0,2,3,4)
+        # print('input features shape', input_features.shape)
         layer_output_list, last_state_list = self.convgru(input_features)
         return layer_output_list, last_state_list

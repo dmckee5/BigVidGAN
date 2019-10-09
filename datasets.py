@@ -10,10 +10,13 @@ from tqdm import tqdm, trange
 
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
+import torchvision.io as io
 from torchvision.datasets.utils import download_url, check_integrity
 import torch.utils.data as data
 from torch.utils.data import DataLoader
-         
+from torchvision.datasets.video_utils import VideoClips
+import numbers
+from glob import glob
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm']
 
 
@@ -40,6 +43,7 @@ def find_classes(dir):
 def make_dataset(dir, class_to_idx):
   images = []
   dir = os.path.expanduser(dir)
+  print
   for target in tqdm(sorted(os.listdir(dir))):
     d = os.path.join(dir, target)
     if not os.path.isdir(d):
@@ -105,14 +109,14 @@ class ImageFolder(data.Dataset):
   """
 
   def __init__(self, root, transform=None, target_transform=None,
-               loader=default_loader, load_in_mem=False, 
+               loader=default_loader, load_in_mem=False,
                index_filename='imagenet_imgs.npz', **kwargs):
     classes, class_to_idx = find_classes(root)
     # Load pre-computed image directory walk
     if os.path.exists(index_filename):
       print('Loading pre-saved Index file %s...' % index_filename)
       imgs = np.load(index_filename)['imgs']
-    # If first time, walk the folder directory and save the 
+    # If first time, walk the folder directory and save the
     # results to a pre-computed file.
     else:
       print('Generating  Index file %s...' % index_filename)
@@ -130,7 +134,7 @@ class ImageFolder(data.Dataset):
     self.target_transform = target_transform
     self.loader = loader
     self.load_in_mem = load_in_mem
-    
+
     if self.load_in_mem:
       print('Loading all images into memory...')
       self.data, self.labels = [], []
@@ -138,7 +142,7 @@ class ImageFolder(data.Dataset):
         path, target = imgs[index][0], imgs[index][1]
         self.data.append(self.transform(self.loader(path)))
         self.labels.append(target)
-          
+
 
   def __getitem__(self, index):
     """
@@ -156,10 +160,10 @@ class ImageFolder(data.Dataset):
       img = self.loader(str(path))
       if self.transform is not None:
         img = self.transform(img)
-    
+
     if self.target_transform is not None:
       target = self.target_transform(target)
-    
+
     # print(img.size(), target)
     return img, int(target)
 
@@ -175,7 +179,7 @@ class ImageFolder(data.Dataset):
     tmp = '    Target Transforms (if any): '
     fmt_str += '{0}{1}'.format(tmp, self.target_transform.__repr__().replace('\n', '\n' + ' ' * len(tmp)))
     return fmt_str
-        
+
 
 ''' ILSVRC_HDF5: A dataset to support I/O from an HDF5 to avoid
     having to load individual images all the time. '''
@@ -185,19 +189,19 @@ class ILSVRC_HDF5(data.Dataset):
   def __init__(self, root, transform=None, target_transform=None,
                load_in_mem=False, train=True,download=False, validate_seed=0,
                val_split=0, **kwargs): # last four are dummies
-      
+
     self.root = root
     self.num_imgs = len(h5.File(root, 'r')['labels'])
-    
+
     # self.transform = transform
-    self.target_transform = target_transform   
-    
+    self.target_transform = target_transform
+
     # Set the transform here
     self.transform = transform
-    
-    # load the entire dataset into memory? 
+
+    # load the entire dataset into memory?
     self.load_in_mem = load_in_mem
-    
+
     # If loading into memory, do so now
     if self.load_in_mem:
       print('Loading %s into memory...' % root)
@@ -217,22 +221,22 @@ class ILSVRC_HDF5(data.Dataset):
     if self.load_in_mem:
       img = self.data[index]
       target = self.labels[index]
-    
+
     # Else load it from disk
     else:
       with h5.File(self.root,'r') as f:
         img = f['imgs'][index]
         target = f['labels'][index]
-    
-   
+
+
     # if self.transform is not None:
         # img = self.transform(img)
     # Apply my own transform
     img = ((torch.from_numpy(img).float() / 255) - 0.5) * 2
-    
+
     if self.target_transform is not None:
       target = self.target_transform(target)
-    
+
     return img, int(target)
 
   def __len__(self):
@@ -259,7 +263,7 @@ class CIFAR10(dset.CIFAR10):
       raise RuntimeError('Dataset not found or corrupted.' +
                            ' You can use download=True to download it')
 
-    # now load the picked numpy arrays    
+    # now load the picked numpy arrays
     self.data = []
     self.labels= []
     for fentry in self.train_list:
@@ -276,34 +280,34 @@ class CIFAR10(dset.CIFAR10):
       else:
         self.labels += entry['fine_labels']
       fo.close()
-        
+
     self.data = np.concatenate(self.data)
     # Randomly select indices for validation
     if self.val_split > 0:
       label_indices = [[] for _ in range(max(self.labels)+1)]
       for i,l in enumerate(self.labels):
-        label_indices[l] += [i]  
+        label_indices[l] += [i]
       label_indices = np.asarray(label_indices)
-      
+
       # randomly grab 500 elements of each class
       np.random.seed(validate_seed)
-      self.val_indices = []           
+      self.val_indices = []
       for l_i in label_indices:
         self.val_indices += list(l_i[np.random.choice(len(l_i), int(len(self.data) * val_split) // (max(self.labels) + 1) ,replace=False)])
-    
-    if self.train=='validate':    
+
+    if self.train=='validate':
       self.data = self.data[self.val_indices]
       self.labels = list(np.asarray(self.labels)[self.val_indices])
-      
+
       self.data = self.data.reshape((int(50e3 * self.val_split), 3, 32, 32))
       self.data = self.data.transpose((0, 2, 3, 1))  # convert to HWC
-    
+
     elif self.train:
       print(np.shape(self.data))
       if self.val_split > 0:
         self.data = np.delete(self.data,self.val_indices,axis=0)
         self.labels = list(np.delete(np.asarray(self.labels),self.val_indices,axis=0))
-          
+
       self.data = self.data.reshape((int(50e3 * (1.-self.val_split)), 3, 32, 32))
       self.data = self.data.transpose((0, 2, 3, 1))  # convert to HWC
     else:
@@ -322,7 +326,7 @@ class CIFAR10(dset.CIFAR10):
       fo.close()
       self.data = self.data.reshape((10000, 3, 32, 32))
       self.data = self.data.transpose((0, 2, 3, 1))  # convert to HWC
-      
+
   def __getitem__(self, index):
     """
     Args:
@@ -343,10 +347,158 @@ class CIFAR10(dset.CIFAR10):
       target = self.target_transform(target)
 
     return img, target
-      
+
   def __len__(self):
       return len(self.data)
 
+class UCF101(data.Dataset):
+
+  # def __init__(self, root, transform=None, video_len=12):
+  #   self.file = os.path.expanduser(root)
+  #   self.video_len = video_len
+  #   self.transform =transform 
+  #   with h5.File(self.file, 'r') as f:
+  #     self.data_len = len(f['labels'])
+
+  # def __getitem__(self, index):
+  #   with h5.File(self.file, 'r') as f:
+  #     start, stop = f['timestamp'][index]
+  #     labels = f['labels'][index]
+  #     if stop - start > self.video_len:
+  #       start_rand = np.random.randint(start, stop - self.video_len) 
+  #       video = f['videos'][index][start_rand: stop]
+  #     else:
+  #       video = f['videos'][index][start: stop]
+  #       while video.shape[0] < self.video_len:
+  #         video = np.vstack((video, video[-1]))
+  #       # print('Added data for %s'%(video_name))
+  #     if self.transform is not None:
+  #       video = self.transform(video)
+  #   return video, label
+
+  # def __len__(self):
+  #   return self.data_len
+  # torchvision.datasets.UCF101(root, annotation_path, frames_per_clip, step_between_clips=1, fold=1, train=True, transform=None)
+
+  def __init__(self, root, clip_length_in_frames=12, frames_between_clips=12, frame_rate=12, transforms = None):
+    print(root, clip_length_in_frames, frames_between_clips)
+    self.video_dataset = VideoClips(glob(root+'/**/*'), clip_length_in_frames, frames_between_clips)
+    self.transforms = transforms
+  
+  def __getitem__(self, index):
+    clip, audio, info, video_idx = self.video_dataset.get_clip(index)
+    if self.transforms != None:
+      clip = self.transforms(clip)
+
+    return clip, 1
+
+  def __len__(self):
+
+    return self.video_dataset.num_clips()
+
+  # def __init__():
+    # self.video_dataset = data.dataset.UCF101(root, annotation_path, frames_per_clip=12, step_between_clips=10)
+    # return self.video_dataset
+
+def _is_tensor_video_clip(clip):
+    if not torch.is_tensor(clip):
+        raise TypeError("clip should be Tensor. Got %s" % type(clip))
+
+    if not clip.ndimension() == 4:
+        raise ValueError("clip should be 4D. Got %dD" % clip.dim())
+
+    return True
+
+class VideoCenterCrop(object):
+  """Crops the given video at the center.
+  Args:
+      size (sequence or int): Desired output size of the crop. If size is an
+          int instead of sequence like (h, w), a square crop (size, size) is
+          made.
+    """
+
+  def __init__(self, size):
+    if isinstance(size, numbers.Number):
+      self.size = (int(size), int(size))
+    else:
+      self.size = size
+
+  def __call__(self, clip):
+    """
+    Args:
+        img (PIL Image): Image to be cropped.
+    Returns:
+        PIL Image: Cropped image.
+      """
+    h, w = clip.shape[-2:]
+    th, tw = self.size
+    i = int(round((h - th) / 2.))
+    j = int(round((w - tw) / 2.))
+    return clip[..., i:(i + th), j:(j + tw)]
+
+
+  def __repr__(self):
+    return self.__class__.__name__ + '(size={0})'.format(self.size)
+
+class VideoNormalize(object):
+  """docstring for VideoNormalize"""
+  def __init__(self, mean, std, inplace=False):
+    super(VideoNormalize, self).__init__()
+    self.mean = mean
+    self.std = std
+    self.inplace = inplace
+  
+
+  def __call__(self, clip):
+    """
+    Args:
+        clip (torch.tensor): video clip to be normalized. Size is (C, T, H, W)
+    """
+    return self.normalize(clip, self.mean, self.std, self.inplace)
+
+  def __repr__(self):
+    return self.__class__.__name__ + '(mean={0}, std={1}, inplace={2})'.format(
+      self.mean, self.std, self.inplace)
+
+  def normalize(self, clip, mean, std, inplace=False):
+    """
+    Args:
+        clip (torch.tensor): Video clip to be normalized. Size is (C, T, H, W)
+        mean (tuple): pixel RGB mean. Size is (3)
+        std (tuple): pixel standard deviation. Size is (3)
+    Returns:
+        normalized clip (torch.tensor): Size is (C, T, H, W)
+    """
+    assert _is_tensor_video_clip(clip), "clip should be a 4D torch.tensor"
+    if not inplace:
+      clip = clip.clone()
+    mean = torch.as_tensor(mean, dtype=clip.dtype, device=clip.device)
+    std = torch.as_tensor(std, dtype=clip.dtype, device=clip.device)
+    clip.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
+    return clip.permute(1, 0, 2, 3)
+
+class ToTensorVideo(object):
+  """
+  Convert tensor data type from uint8 to float, divide value by 255.0 and
+  permute the dimenions of clip tensor
+  """
+  def __init__(self):
+    pass
+    
+  def __call__(self, clip):
+    """
+    Args:
+        clip (torch.tensor, dtype=torch.uint8): Size is (T, H, W, C)
+    Return:
+        clip (torch.tensor, dtype=torch.float): Size is (C, T, H, W)
+    """
+    _is_tensor_video_clip(clip)
+    if not clip.dtype == torch.uint8:
+      raise TypeError("clip tensor should have data type uint8. Got %s" % str(clip.dtype))
+    return clip.float().permute(3, 0, 1, 2) / 255.0
+
+  def __repr__(self):
+    return self.__class__.__name__
 
 class CIFAR100(CIFAR10):
     base_folder = 'cifar-100-python'

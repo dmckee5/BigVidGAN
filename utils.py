@@ -23,7 +23,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
+# import torchvision.transforms as transforms
+from torch.utils.data import DataLoader, Dataset
 
 import datasets as dset
 
@@ -45,6 +46,10 @@ def prepare_parser():
     help='Number of dataloader workers; consider using less for HDF5 '
          '(default: %(default)s)')
   parser.add_argument(
+    '--frame_size', type=int, default=64,
+    help='Number of dataloader workers; consider using less for HDF5 '
+         '(default: %(default)s)')
+  parser.add_argument(
     '--no_pin_memory', action='store_false', dest='pin_memory', default=True,
     help='Pin data into memory through dataloader? (default: %(default)s)')
   parser.add_argument(
@@ -56,6 +61,9 @@ def prepare_parser():
   parser.add_argument(
     '--use_multiepoch_sampler', action='store_true', default=False,
     help='Use the multi-epoch sampler for dataloader? (default: %(default)s)')
+  parser.add_argument(
+    '--annotation_file', type = str, default='/home/nfs/data/trainlist01.txt',
+    help='Where is the data seperation file? (default: %(default)s)')
 
 
   ### Model stuff ###
@@ -122,9 +130,19 @@ def prepare_parser():
     '--time_steps', type=int, default=12,
     help='Length of generated videos '
          '(default: %(default)s)')
+  # xiaodan: add frames_between_clips
+  parser.add_argument(
+    '--frames_between_clips', type=int, default=12,
+    help='How many frames between the beginning of this clip and the beginning of the last clip. It should be the same as time_steps for most cases '
+         '(default: %(default)s)')
   parser.add_argument(
     '--D_attn', type=str, default='64',
     help='What resolutions to use attention on for D (underscore separated) '
+         '(default: %(default)s)')
+  # xiaodan: number of sanmple for image discriminator
+  parser.add_argument(
+    '--k', type=int, default=8,
+    help='Number of randomly sampled frames for image discriminator '
          '(default: %(default)s)')
   parser.add_argument(
     '--norm_style', type=str, default='bn',
@@ -265,7 +283,7 @@ def prepare_parser():
     '--samples_root', type=str, default='samples',
     help='Default location to store samples (default: %(default)s)')
   parser.add_argument(
-    '--pbar', type=str, default='mine',
+    '--pbar', type=str, default='tqdm',
     help='Type of progressbar to use; one of "mine" or "tqdm" '
          '(default: %(default)s)')
   parser.add_argument(
@@ -410,28 +428,28 @@ dset_dict = {'I32': dset.ImageFolder, 'I64': dset.ImageFolder,
              'I128': dset.ImageFolder, 'I256': dset.ImageFolder,
              'I32_hdf5': dset.ILSVRC_HDF5, 'I64_hdf5': dset.ILSVRC_HDF5,
              'I128_hdf5': dset.ILSVRC_HDF5, 'I256_hdf5': dset.ILSVRC_HDF5,
-             'C10': dset.CIFAR10, 'C100': dset.CIFAR100}
+             'C10': dset.CIFAR10, 'C100': dset.CIFAR100, 'UCF101': dset.UCF101}
 imsize_dict = {'I32': 32, 'I32_hdf5': 32,
                'I64': 64, 'I64_hdf5': 64,
                'I128': 128, 'I128_hdf5': 128,
                'I256': 256, 'I256_hdf5': 256,
-               'C10': 32, 'C100': 32}
+               'C10': 32, 'C100': 32, 'UCF101': 64}  #hardcoded needs to be changed later: Jugat
 root_dict = {'I32': 'ImageNet', 'I32_hdf5': 'ILSVRC32.hdf5',
              'I64': 'ImageNet', 'I64_hdf5': 'ILSVRC64.hdf5',
              'I128': 'ImageNet', 'I128_hdf5': 'ILSVRC128.hdf5',
              'I256': 'ImageNet', 'I256_hdf5': 'ILSVRC256.hdf5',
-             'C10': 'cifar', 'C100': 'cifar'}
+             'C10': 'cifar', 'C100': 'cifar', 'UCF101': 'UCF101.hdf5'}
 nclass_dict = {'I32': 1000, 'I32_hdf5': 1000,
                'I64': 1000, 'I64_hdf5': 1000,
                'I128': 1000, 'I128_hdf5': 1000,
                'I256': 1000, 'I256_hdf5': 1000,
-               'C10': 10, 'C100': 100}
+               'C10': 10, 'C100': 100, 'UCF101': 101}
 # Number of classes to put per sample sheet
 classes_per_sheet_dict = {'I32': 50, 'I32_hdf5': 50,
                           'I64': 50, 'I64_hdf5': 50,
                           'I128': 20, 'I128_hdf5': 20,
                           'I256': 20, 'I256_hdf5': 20,
-                          'C10': 10, 'C100': 100}
+                          'C10': 10, 'C100': 100, 'UCF101': 101}
 activation_dict = {'inplace_relu': nn.ReLU(inplace=True),
                    'relu': nn.ReLU(inplace=False),
                    'ir': nn.ReLU(inplace=True),}
@@ -586,6 +604,34 @@ def get_data_loaders(dataset, data_root=None, augment=False, batch_size=64,
                               shuffle=shuffle, **loader_kwargs)
   loaders.append(train_loader)
   return loaders
+
+
+def get_video_data_loaders(dataset, data_root=None, annotation_path=None, augment=False, batch_size=64,
+                     time_steps=12, frames_between_clips=12,
+                     num_workers=8, shuffle=True, load_in_mem=False, hdf5=True,
+                     pin_memory=True, drop_last=True, start_itr=0,
+                     num_epochs=500, use_multiepoch_sampler=False, frame_size = 128,
+                     **kwargs):
+
+  # # Append /FILENAME.hdf5 to root if using hdf5
+  # data_root += '/%s' % root_dict[dataset]
+  # print('Using dataset root location %s' % data_root)
+
+  # which_dataset = dset_dict[dataset]
+  norm_mean = [0.5,0.5,0.5]
+  norm_std = [0.5,0.5,0.5]
+  print(frame_size)
+  # # For image folder datasets, name of the file where we store the precomputed
+  # # image locations to avoid having to walk the dirs every time we load.
+  # # dataset_kwargs = {'index_filename': '%s_imgs.npz' % dataset}
+
+  train_transform = transforms.Compose([
+                   dset.ToTensorVideo(),
+                   dset.VideoCenterCrop(frame_size),
+                   dset.VideoNormalize(norm_mean, norm_std)])
+  loader_kwargs = {'num_workers': num_workers, 'pin_memory': pin_memory}
+  video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=frames_between_clips, transforms = train_transform)
+  return [DataLoader(video_dataset, batch_size=batch_size, shuffle=shuffle, **loader_kwargs)]
 
 
 # Utility file to seed rngs
@@ -1197,3 +1243,10 @@ class Adam16(Optimizer):
         p.data = state['fp32_p'].half()
 
     return loss
+
+#xiaodan: funciton to randomly select k frames from a 5D video Tensor
+def sample_frames(x, y, k=8): #[B,T,C,H,W]
+    # print('x and y in sample_frames',x.shape,y.shape)
+    weights = torch.arange(x.shape[1], dtype=torch.float)
+    index=torch.multinomial(weights, k, replacement=False, out=None)
+    return x[:,index,:,:,:], y.unsqueeze(1).repeat(1,k,1)
