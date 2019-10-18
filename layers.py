@@ -680,5 +680,35 @@ class DBlock(nn.Module):
 
     return h + self.shortcut(x)
 
+
+class BasicBlock(nn.Module):
+    # expansion = 1
+    def __init__(self, in_planes, out_planes, which_conv1, which_conv2, downsample=None):
+        super(BasicBlock, self).__init__()
+        self.conv1 = which_conv1(in_planes, out_planes)
+        # self.bn1 = nn.BatchNorm3d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = which_conv2(out_planes, out_planes)
+        # self.bn2 = nn.BatchNorm3d(planes)
+        self.downsample = downsample
+
+
+    def forward(self, x):
+        residual = x
+
+        out = self.conv1(x)
+        # out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        # out = self.bn2(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual
+        out = self.relu(out)
+
+        return out
 # dogball
 #test

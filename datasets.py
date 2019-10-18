@@ -15,6 +15,7 @@ from torchvision.datasets.utils import download_url, check_integrity
 import torch.utils.data as data
 from torch.utils.data import DataLoader
 from torchvision.datasets.video_utils import VideoClips
+from torchvision.datasets.utils import list_dir
 import numbers
 from glob import glob
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm']
@@ -303,7 +304,7 @@ class CIFAR10(dset.CIFAR10):
       self.data = self.data.transpose((0, 2, 3, 1))  # convert to HWC
 
     elif self.train:
-      print(np.shape(self.data))
+      # print(np.shape(self.data))
       if self.val_split > 0:
         self.data = np.delete(self.data,self.val_indices,axis=0)
         self.labels = list(np.delete(np.asarray(self.labels),self.val_indices,axis=0))
@@ -380,21 +381,49 @@ class UCF101(data.Dataset):
   #   return self.data_len
   # torchvision.datasets.UCF101(root, annotation_path, frames_per_clip, step_between_clips=1, fold=1, train=True, transform=None)
 
-  def __init__(self, root, clip_length_in_frames=12, frames_between_clips=12, frame_rate=12, transforms = None):
-    print(root, clip_length_in_frames, frames_between_clips)
-    self.video_dataset = VideoClips(glob(root+'/**/*'), clip_length_in_frames, frames_between_clips)
+  def __init__(self, root, extensions=None, clip_length_in_frames=12, frames_between_clips=12, frame_rate=12, transforms = None):
+    # print(root, clip_length_in_frames, frames_between_clips)
+    if extensions == None:
+      extensions = ('avi','mp4')
+    classes = list(sorted(list_dir(root)))
+    class_to_idx = {classes[i]: i for i in range(len(classes))}
+    self.samples = self.make_dataset(root, class_to_idx, extensions, is_valid_file=None)
+    video_list = [x[0] for x in self.samples]
+    self.video_clips = VideoClips(glob(root+'/**/*'), clip_length_in_frames, frames_between_clips)
     self.transforms = transforms
-  
+
+  def make_dataset(self, dir, class_to_idx, extensions=None, is_valid_file=None):
+    samples = []
+    dir = os.path.expanduser(dir)
+    if not ((extensions is None) ^ (is_valid_file is None)):
+        raise ValueError("Both extensions and is_valid_file cannot be None or not None at the same time")
+    if extensions is not None:
+        def is_valid_file(x):
+            return x.lower().endswith(extensions)
+    for target in sorted(class_to_idx.keys()):
+        d = os.path.join(dir, target)
+        if not os.path.isdir(d):
+            continue
+        for root, _, fnames in sorted(os.walk(d)):
+            for fname in sorted(fnames):
+                path = os.path.join(root, fname)
+                if is_valid_file(path):
+                    item = (path, class_to_idx[target])
+                    samples.append(item)
+
+    return samples
+
   def __getitem__(self, index):
-    clip, audio, info, video_idx = self.video_dataset.get_clip(index)
+    clip, audio, info, video_idx = self.video_clips.get_clip(index)
     if self.transforms != None:
       clip = self.transforms(clip)
-
-    return clip, 1
+    label = self.samples[video_idx][1]
+    
+    return clip, label
 
   def __len__(self):
 
-    return self.video_dataset.num_clips()
+    return self.video_clips.num_clips()
 
   # def __init__():
     # self.video_dataset = data.dataset.UCF101(root, annotation_path, frames_per_clip=12, step_between_clips=10)

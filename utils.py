@@ -620,7 +620,7 @@ def get_video_data_loaders(dataset, data_root=None, annotation_path=None, augmen
   # which_dataset = dset_dict[dataset]
   norm_mean = [0.5,0.5,0.5]
   norm_std = [0.5,0.5,0.5]
-  print(frame_size)
+  # print(frame_size)
   # # For image folder datasets, name of the file where we store the precomputed
   # # image locations to avoid having to walk the dirs every time we load.
   # # dataset_kwargs = {'index_filename': '%s_imgs.npz' % dataset}
@@ -630,7 +630,7 @@ def get_video_data_loaders(dataset, data_root=None, annotation_path=None, augmen
                    dset.VideoCenterCrop(frame_size),
                    dset.VideoNormalize(norm_mean, norm_std)])
   loader_kwargs = {'num_workers': num_workers, 'pin_memory': pin_memory}
-  video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=frames_between_clips, transforms = train_transform)
+  video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=time_steps, transforms = train_transform)
   return [DataLoader(video_dataset, batch_size=batch_size, shuffle=shuffle, **loader_kwargs)]
 
 
@@ -735,7 +735,7 @@ def join_strings(base_string, strings):
 
 
 # Save a model's weights, optimizer, and the state_dict
-def save_weights(G, D, state_dict, weights_root, experiment_name,
+def save_weights(G, D, Dv, state_dict, weights_root, experiment_name,
                  name_suffix=None, G_ema=None):
   root = '/'.join([weights_root, experiment_name])
   if not os.path.exists(root):
@@ -752,6 +752,10 @@ def save_weights(G, D, state_dict, weights_root, experiment_name,
               '%s/%s.pth' % (root, join_strings('_', ['D', name_suffix])))
   torch.save(D.optim.state_dict(),
               '%s/%s.pth' % (root, join_strings('_', ['D_optim', name_suffix])))
+  torch.save(Dv.state_dict(),
+              '%s/%s.pth' % (root, join_strings('_', ['Dv', name_suffix])))
+  torch.save(Dv.optim.state_dict(),
+              '%s/%s.pth' % (root, join_strings('_', ['Dv_optim', name_suffix])))
   torch.save(state_dict,
               '%s/%s.pth' % (root, join_strings('_', ['state_dict', name_suffix])))
   if G_ema is not None:
@@ -760,7 +764,7 @@ def save_weights(G, D, state_dict, weights_root, experiment_name,
 
 
 # Load a model's weights, optimizer, and the state_dict
-def load_weights(G, D, state_dict, weights_root, experiment_name,
+def load_weights(G, D, Dv, state_dict, weights_root, experiment_name,
                  name_suffix=None, G_ema=None, strict=True, load_optim=True):
   root = '/'.join([weights_root, experiment_name])
   if name_suffix:
@@ -781,6 +785,14 @@ def load_weights(G, D, state_dict, weights_root, experiment_name,
     if load_optim:
       D.optim.load_state_dict(
         torch.load('%s/%s.pth' % (root, join_strings('_', ['D_optim', name_suffix]))))
+  if Dv is not None:
+    Dv.load_state_dict(
+      torch.load('%s/%s.pth' % (root, join_strings('_', ['Dv', name_suffix]))),
+      strict = strict)
+    if load_optim:
+      Dv.optim.load_state_dict(
+        torch.load('%s/%s.pth' % (root, join_strings('_', ['Dv_optim', name_suffix]))))
+
   # Load state dict
   for item in state_dict:
     state_dict[item] = torch.load('%s/%s.pth' % (root, join_strings('_', ['state_dict', name_suffix])))[item]
@@ -946,8 +958,8 @@ def sample_sheet(G, classes_per_sheet, num_classes, samples_per_class, parallel,
           o = nn.parallel.data_parallel(G, (z_[:classes_per_sheet], G.shared(y)))
         else:
           o = G(z_[:classes_per_sheet], G.shared(y))
-
-      ims += [o.data.cpu()]
+      # xiaodan: only add the first frame of the video clip
+      ims += [o[:,0,:,:,:].data.cpu()]
     # This line should properly unroll the images
     out_ims = torch.stack(ims, 1).view(-1, ims[0].shape[1], ims[0].shape[2],
                                        ims[0].shape[3]).data.float().cpu()
@@ -997,7 +1009,8 @@ def interp_sheet(G, num_per_sheet, num_midpoints, num_classes, parallel,
   image_filename = '%s/%s/%d/interp%s%d.jpg' % (samples_root, experiment_name,
                                                 folder_number, interp_style,
                                                 sheet_number)
-  torchvision.utils.save_image(out_ims, image_filename,
+  #xiaodan: save only the first frame
+  torchvision.utils.save_image(out_ims[:,0,:,:,:], image_filename,
                                nrow=num_midpoints + 2, normalize=True)
 
 

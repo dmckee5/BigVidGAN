@@ -281,8 +281,8 @@ class Generator(nn.Module):
         ys_BT = ys[index].repeat(self.time_steps,1,1).permute(1,0,2).contiguous().view(-1,y.shape[-1])
         # print('y and ys_BT shape',y.shape,ys_BT.shape)
         h = block(h, ys_BT) #[BT,C,H,W]
-        print('ys_BT', ys_BT.get_device())
-        print('h', h.get_device())
+        # print('ys_BT', ys_BT.get_device())
+        # print('h', h.get_device())
 
     # Apply batchnorm-relu-conv-tanh at output
     return torch.tanh(self.output_layer(h)).contiguous().view(-1,self.time_steps,3,*h.shape[2:]) #[B,T,3,H,W]
@@ -319,30 +319,34 @@ def D_img_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
 
 def D_vid_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
   arch = {}
-  arch[256] = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8, 8, 16]],
-               'out_channels' : [item * ch for item in [1, 2, 4, 8, 8, 16, 16]],
-               'downsample' : [True] * 6 + [False],
-               'resolution' : [128, 64, 32, 16, 8, 4, 4 ],
-               'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
-                              for i in range(2,8)}}
-  arch[128] = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8, 16]],
-               'out_channels' : [item * ch for item in [1, 2, 4, 8, 16, 16]],
+  arch[256] = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8, 8]],
+               'out_channels' : [item * ch for item in [1, 2, 4, 8, 8, 16]],
                'downsample' : [True] * 5 + [False],
-               'resolution' : [64, 32, 16, 8, 4, 4],
+               'resolution' : [64, 32, 16, 8, 4, 4 ],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
-                              for i in range(2,8)}}
-  arch[64]  = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8]],
+                              for i in range(2,7)},
+                '3D resnet' :[True] * 2 + [False] * 4       }
+  arch[128] = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8]],
                'out_channels' : [item * ch for item in [1, 2, 4, 8, 16]],
                'downsample' : [True] * 4 + [False],
                'resolution' : [32, 16, 8, 4, 4],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
-                              for i in range(2,7)}}
+                              for i in range(2,7)},
+                '3D resnet' :[True] * 2 + [False] * 3       }
+  arch[64]  = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4]],
+               'out_channels' : [item * ch for item in [1, 2, 4, 8]],
+               'downsample' : [True] * 3 + [False],
+               'resolution' : [16, 8, 4, 4],
+               'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
+                              for i in range(2,6)},
+               '3D resnet' :[True] * 2 + [False] * 2       }
   arch[32]  = {'in_channels' :  [3] + [item * ch for item in [4, 4, 4]],
                'out_channels' : [item * ch for item in [4, 4, 4, 4]],
                'downsample' : [True, True, False, False],
                'resolution' : [16, 16, 16, 16],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
-                              for i in range(2,6)}}
+                              for i in range(2,6)},
+                '3D resnet' :[True] * 2 + [False] * 2       }
   return arch
 
 class ImageDiscriminator(nn.Module):
@@ -382,6 +386,7 @@ class ImageDiscriminator(nn.Module):
     # Which convs, batchnorms, and linear layers to use
     # No option to turn off SN in D right now
     if self.D_param == 'SN':
+      self.InitDownsample = nn.AvgPool3d(kernel_size=(1,2,2),stride = (1,2,2))
       self.which_conv = functools.partial(layers.SNConv2d,
                           kernel_size=3, padding=1,
                           num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
@@ -464,7 +469,11 @@ class ImageDiscriminator(nn.Module):
     h = torch.sum(self.activation(h), [2, 3])
     # Get initial class-unconditional output
     out = self.linear(h)
-    print('out', out.get_device())
+    # print('out', out.get_device())
+
+    # print('y.shape image', y.shape)
+    # print('embed(y) shape image', self.embed(y).shape)
+    # print('h shape image', h.shape)
     # Get projection of final featureset onto class vectors and add to evidence
     out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
     return out
@@ -472,7 +481,7 @@ class ImageDiscriminator(nn.Module):
 class VideoDiscriminator(nn.Module):
 
   def __init__(self, D_ch=64, D_wide=True, resolution=128,
-               D_kernel_size=3, D_attn='64', n_classes=1000,
+               D_kernel_size=3, D_attn='64', n_classes=1000, time_steps = 12,
                num_D_SVs=1, num_D_SV_itrs=1, D_activation=nn.ReLU(inplace=False),
                D_lr=2e-4, D_B1=0.0, D_B2=0.999, adam_eps=1e-8,
                SN_eps=1e-12, output_dim=1, D_mixed_precision=False, D_fp16=False,
@@ -490,6 +499,8 @@ class VideoDiscriminator(nn.Module):
     self.attention = D_attn
     # Number of classes
     self.n_classes = n_classes
+    #xiaodan: added time_steps here
+    self.time_steps = time_steps
     # Activation
     self.activation = D_activation
     # Initialization style
@@ -501,12 +512,21 @@ class VideoDiscriminator(nn.Module):
     # Fp16?
     self.fp16 = D_fp16
     # Architecture
-    self.arch = D_arch(self.ch, self.attention)[resolution]
+    self.arch = D_vid_arch(self.ch, self.attention)[resolution]
 
     # Which convs, batchnorms, and linear layers to use
     # No option to turn off SN in D right now
     if self.D_param == 'SN':
+      self.InitDownsample = nn.AvgPool3d(kernel_size=(1,2,2),stride = (1,2,2))
       self.which_conv = functools.partial(layers.SNConv2d,
+                          kernel_size=3, padding=1,
+                          num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
+                          eps=self.SN_eps)
+      self.which_conv3d_1 = functools.partial(layers.SNConv3d,
+                          kernel_size=3, padding=1, stride=2,
+                          num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
+                          eps=self.SN_eps)
+      self.which_conv3d_2 = functools.partial(layers.SNConv3d,
                           kernel_size=3, padding=1,
                           num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
                           eps=self.SN_eps)
@@ -521,25 +541,43 @@ class VideoDiscriminator(nn.Module):
     # to be over blocks at a given resolution (resblocks and/or self-attention)
     self.blocks = []
     for index in range(len(self.arch['out_channels'])):
-      self.blocks += [[layers.DBlock(in_channels=self.arch['in_channels'][index],
+      if self.arch['3D resnet'][index]:
+        self.blocks += [[layers.BasicBlock(
+                         in_planes=self.arch['in_channels'][index],
+                         out_planes=self.arch['out_channels'][index],
+                         which_conv1 = self.which_conv3d_1,
+                         which_conv2 = self.which_conv3d_2,
+                         downsample=(nn.Conv3d(
+                                        self.arch['in_channels'][index],
+                                        self.arch['out_channels'][index],
+                                        kernel_size=1,
+                                        stride=2,
+                                        bias=False) if self.arch['downsample'][index] else None)
+                          )]]
+      else:
+        self.blocks += [[layers.DBlock(in_channels=self.arch['in_channels'][index],
                        out_channels=self.arch['out_channels'][index],
                        which_conv=self.which_conv,
                        wide=self.D_wide,
                        activation=self.activation,
                        preactivation=(index > 0),
                        downsample=(nn.AvgPool2d(2) if self.arch['downsample'][index] else None))]]
-      # If attention on this block, attach it to the end
-      if self.arch['attention'][self.arch['resolution'][index]]:
-        print('Adding attention layer in D at resolution %d' % self.arch['resolution'][index])
-        self.blocks[-1] += [layers.Attention(self.arch['out_channels'][index],
-                                             self.which_conv)]
+          #xiaodan: disabled for video discriminator
+          # If attention on this block, attach it to the end
+          # if self.arch['attention'][self.arch['resolution'][index]]:
+          #   print('Adding attention layer in D at resolution %d' % self.arch['resolution'][index])
+          #   self.blocks[-1] += [layers.Attention(self.arch['out_channels'][index],
+          #                                        self.which_conv)]
     # Turn self.blocks into a ModuleList so that it's all properly registered.
     self.blocks = nn.ModuleList([nn.ModuleList(block) for block in self.blocks])
     # Linear output layer. The output dimension is typically 1, but may be
     # larger if we're e.g. turning this into a VAE with an inference output
-    self.linear = self.which_linear(self.arch['out_channels'][-1], output_dim)
+    t_dim_red_const = self.arch['3D resnet'].count(True) * 2
+    even =  self.time_steps % 2
+    reduced_t_dim = (self.time_steps // t_dim_red_const + even)
+    self.linear = self.which_linear(self.arch['out_channels'][-1] * reduced_t_dim, output_dim)
     # Embedding for projection discrimination
-    self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1])
+    self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1] * reduced_t_dim)
 
     # Initialize weights
     if not skip_init:
@@ -565,7 +603,8 @@ class VideoDiscriminator(nn.Module):
     for module in self.modules():
       if (isinstance(module, nn.Conv2d)
           or isinstance(module, nn.Linear)
-          or isinstance(module, nn.Embedding)):
+          or isinstance(module, nn.Embedding)
+          or isinstance(module, nn.Conv3d)):
         if self.init == 'ortho':
           init.orthogonal_(module.weight)
         elif self.init == 'N02':
@@ -575,20 +614,31 @@ class VideoDiscriminator(nn.Module):
         else:
           print('Init style not recognized...')
         self.param_count += sum([p.data.nelement() for p in module.parameters()])
-    print('Param count for D''s initialized parameters: %d' % self.param_count)
+    print('Param count for Dv''s initialized parameters: %d' % self.param_count)
 
   def forward(self, x, y=None):
     # Stick x into h for cleaner for loops without flow control
-    h = x
+    h = x #[B,T,C,H,W]
+    h = h.permute(0,2,1,3,4).contiguous() #[B,C,T,H,W]
+    h = self.InitDownsample(h) #[B,C,T,H/2,W/2]
     # Loop over blocks
     for index, blocklist in enumerate(self.blocks):
+      if not self.arch['3D resnet'][index] and index > 0 and self.arch['3D resnet'][index-1]:
+        h = h.permute(0,2,1,3,4)#[B,T*,C*,H*,W*]
+        h = h.contiguous().view(-1,*h.shape[2:]) #[BT*,C*,H*,W*]
       for block in blocklist:
         h = block(h)
+    # [BT*,C*,H*,W*]
     # Apply global sum pooling as in SN-GAN
-    h = torch.sum(self.activation(h), [2, 3])
+    h = torch.sum(self.activation(h), [2, 3]) # [BT*,C*]
+    h = h.contiguous().view(x.shape[0],-1,h.shape[-1]) # [B,T*,C*]
+    h = h.contiguous().view(x.shape[0],-1)# [B,T*C*]
     # Get initial class-unconditional output
-    out = self.linear(h)
+    out = self.linear(h) # [B,1]
     # Get projection of final featureset onto class vectors and add to evidence
+    # print('y.shape', y.shape)
+    # print('embed(y) shape', self.embed(y).shape)
+    # print('h shape', h.shape)
     out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
     return out
 
@@ -596,14 +646,15 @@ class VideoDiscriminator(nn.Module):
 # Parallelized G_D to minimize cross-gpu communication
 # Without this, Generator outputs would get all-gathered and then rebroadcast.
 class G_D(nn.Module):
-  def __init__(self, G, D, k=8):
+  def __init__(self, G, D, Dv, k=8):
     super(G_D, self).__init__()
     self.G = G
     self.D = D
+    self.Dv = Dv
     self.k = k
-    print('self.k',self.k)
+    # print('self.k',self.k)
   def forward(self, z, gy, x=None, dy=None, train_G=False, return_G_z=False,
-              split_D=False):
+              split_D=False, tensor_writer = None, iteration = None):
     # print('z shape in GD before with:',z.shape)
     # If training G, enable grad tape
     with torch.set_grad_enabled(train_G):
@@ -618,6 +669,8 @@ class G_D(nn.Module):
         G_z = G_z.float()
       if self.D.fp16 and not self.G.fp16:
         G_z = G_z.half()
+    if tensor_writer != None and iteration % 100 == 0:
+      tensor_writer.add_video('Video Results', (G_z + 1)/2, iteration)
     #xiaodan: need to sample for k frames
     import utils
     sampled_G_z,sampled_gy = utils.sample_frames(G_z,gy,self.k) # [B,8,C,H,W], [B,8,120]
@@ -633,26 +686,30 @@ class G_D(nn.Module):
     # rather than concatenating along the batch dimension.
     if split_D:
       D_fake = self.D(sampled_G_z, sampled_gy)
+      Dv_fake = self.Dv(G_z, gy)
       if x is not None:
         D_real = self.D(sampled_x, sampled_dy)
-        return D_fake, D_real
+        Dv_real = self.Dv(x, dy)
+        return D_fake, D_real, Dv_fake, Dv_real
       else:
         if return_G_z:
-          return D_fake, sampled_G_z
+          return D_fake, sampled_G_z, Dv_fake, G_z
         else:
-          return D_fake
+          return D_fake, Dv_fake
     # If real data is provided, concatenate it with the Generator's output
     # along the batch dimension for improved efficiency.
     else:
-
       D_input = torch.cat([sampled_G_z, sampled_x], 0) if x is not None else sampled_G_z
       D_class = torch.cat([sampled_gy, sampled_dy], 0) if dy is not None else sampled_gy
+      Dv_input = torch.cat([G_z, x], 0) if x is not None else G_z
+      Dv_class = torch.cat([gy, dy], 0) if dy is not None else gy
       # Get Discriminator output
       D_out = self.D(D_input, D_class)
+      Dv_out = self.Dv(Dv_input, Dv_class)
       if x is not None:
-        return torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]]) # D_fake, D_real
+        return list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]])) + list(torch.split(Dv_out, [G_z.shape[0], x.shape[0]])) # D_fake, D_real
       else:
         if return_G_z:
-          return D_out, sampled_G_z
+          return D_out, sampled_G_z, Dv_out, G_z
         else:
-          return D_out
+          return D_out, Dv_out
