@@ -669,8 +669,6 @@ class G_D(nn.Module):
         G_z = G_z.float()
       if self.D.fp16 and not self.G.fp16:
         G_z = G_z.half()
-    if tensor_writer != None and iteration % 100 == 0:
-      tensor_writer.add_video('Video Results', (G_z + 1)/2, iteration)
     #xiaodan: need to sample for k frames
     import utils
     sampled_G_z,sampled_gy = utils.sample_frames(G_z,gy,self.k) # [B,8,C,H,W], [B,8,120]
@@ -690,12 +688,12 @@ class G_D(nn.Module):
       if x is not None:
         D_real = self.D(sampled_x, sampled_dy)
         Dv_real = self.Dv(x, dy)
-        return D_fake, D_real, Dv_fake, Dv_real
+        return D_fake, D_real, Dv_fake, Dv_real, G_z
       else:
         if return_G_z:
           return D_fake, sampled_G_z, Dv_fake, G_z
         else:
-          return D_fake, Dv_fake
+          return D_fake, Dv_fake, G_z
     # If real data is provided, concatenate it with the Generator's output
     # along the batch dimension for improved efficiency.
     else:
@@ -707,9 +705,10 @@ class G_D(nn.Module):
       D_out = self.D(D_input, D_class)
       Dv_out = self.Dv(Dv_input, Dv_class)
       if x is not None:
-        return list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]])) + list(torch.split(Dv_out, [G_z.shape[0], x.shape[0]])) # D_fake, D_real
+        D_out_fake, D_out_real, Dv_out_fake, Dv_out_real = list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]])) + list(torch.split(Dv_out, [G_z.shape[0], x.shape[0]])) # D_fake, D_real
+        return D_out_fake, D_out_real, Dv_out_fake, Dv_out_real, G_z
       else:
         if return_G_z:
           return D_out, sampled_G_z, Dv_out, G_z
         else:
-          return D_out, Dv_out
+          return D_out, Dv_out, G_z

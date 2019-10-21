@@ -46,7 +46,7 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
         # print('hier and G_shared:',config['hier'],config['G_shared'])
         # print('Shape of z_[:config[batch_size]]:',z_[:config['batch_size']].shape)
         # print('config[batch_size]',config['batch_size'])
-        D_fake, D_real, Dv_fake, Dv_real = GD(z_[:config['batch_size']], y_[:config['batch_size']],
+        D_fake, D_real, Dv_fake, Dv_real, G_z = GD(z_[:config['batch_size']], y_[:config['batch_size']],
                             x[counter], y[counter], train_G=False,
                             split_D=config['split_D'])
         # print('GD.k in train_fns line 49',GD.module.k) #GD.module because GD is now dataparallel class
@@ -87,7 +87,7 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       z_.sample_()
       y_.sample_()
       # print('z_,y_ shapes before pass into GD:',z_.shape,y_.shape)
-      D_fake, Dv_fake = GD(z_, y_, train_G=True, split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
+      D_fake, Dv_fake, G_z= GD(z_, y_, train_G=True, split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
 
       D_fake = D_fake.contiguous().view(-1,GD.module.k,*D_fake.shape[1:])
       D_fake = torch.sum(D_fake,1) #xiaodan: add k scores before doing hinge loss, according to the paper
@@ -113,6 +113,8 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
             'D_loss_fake': float(D_loss_fake.item()),
             'Dv_loss_real': float(Dv_loss_real.item()),
             'Dv_loss_fake': float(Dv_loss_fake.item())}
+    if tensor_writer != None and iteration % 100 == 0:
+      tensor_writer.add_video('Video Results', (G_z + 1)/2, iteration)
     # Return G's loss and the components of D's loss.
     tensor_writer.add_scalar('Loss/G_loss', out['G_loss'], iteration)
     tensor_writer.add_scalar('Loss/D_loss_real', out['D_loss_real'], iteration)

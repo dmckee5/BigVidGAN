@@ -21,7 +21,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.nn import Parameter as P
 import torchvision
-
+import datetime
 # Import my stuff
 import inception_utils
 import utils
@@ -172,8 +172,11 @@ def run(config):
                               z_=z_, y_=y_, config=config)
 
   print('Beginning training at epoch %d...' % state_dict['epoch'])
+  unique_id = datetime.datetime.now().strftime('%Y%m-%d%H-%M%S-')
+  tensorboard_path = os.path.join(config['logs_root'], 'tensorboard_logs', unique_id)
+  os.makedirs(tensorboard_path)
   # Train for specified number of epochs, although we mostly track G iterations.
-  writer = SummaryWriter(log_dir=os.path.join(config['logs_root'], 'tensorboard_logs'))
+  writer = SummaryWriter(log_dir=tensorboard_path)
   for epoch in range(state_dict['epoch'], config['num_epochs']):
     # Which progressbar to use? TQDM or my own?
     if config['pbar'] == 'mine':

@@ -389,7 +389,7 @@ class UCF101(data.Dataset):
     class_to_idx = {classes[i]: i for i in range(len(classes))}
     self.samples = self.make_dataset(root, class_to_idx, extensions, is_valid_file=None)
     video_list = [x[0] for x in self.samples]
-    self.video_clips = VideoClips(glob(root+'/**/*'), clip_length_in_frames, frames_between_clips)
+    self.video_clips = VideoClips(glob(root+'/**/*'), clip_length_in_frames, frames_between_clips,frame_rate=frame_rate)
     self.transforms = transforms
 
   def make_dataset(self, dir, class_to_idx, extensions=None, is_valid_file=None):

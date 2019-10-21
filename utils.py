@@ -607,7 +607,7 @@ def get_data_loaders(dataset, data_root=None, augment=False, batch_size=64,
 
 
 def get_video_data_loaders(dataset, data_root=None, annotation_path=None, augment=False, batch_size=64,
-                     time_steps=12, frames_between_clips=12,
+                     time_steps=12, frames_between_clips=10e6,
                      num_workers=8, shuffle=True, load_in_mem=False, hdf5=True,
                      pin_memory=True, drop_last=True, start_itr=0,
                      num_epochs=500, use_multiepoch_sampler=False, frame_size = 128,
@@ -630,7 +630,8 @@ def get_video_data_loaders(dataset, data_root=None, annotation_path=None, augmen
                    dset.VideoCenterCrop(frame_size),
                    dset.VideoNormalize(norm_mean, norm_std)])
   loader_kwargs = {'num_workers': num_workers, 'pin_memory': pin_memory}
-  video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=time_steps, transforms = train_transform)
+  video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=frames_between_clips, transforms = train_transform)
+  print('Shuffle the dataset?',shuffle)
   return [DataLoader(video_dataset, batch_size=batch_size, shuffle=shuffle, **loader_kwargs)]
 
 
