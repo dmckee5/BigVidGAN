@@ -102,6 +102,12 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       # Don't ortho reg shared, it makes no sense. Really we should blacklist any embeddings for this
       utils.ortho(G, config['G_ortho'],
                   blacklist=[param for param in G.shared.parameters()])
+    G_grad_gates = G.convgru.convgru.cell_list[0].conv_gates.weight.grad.abs().sum()
+    G_grad_can = G.convgru.convgru.cell_list[0].conv_can.weight.grad.abs().sum()
+    G_grad_first_layer = G.blocks[0][0].conv1.weight.grad.abs().sum()
+    G_weight_gates = G.convgru.convgru.cell_list[0].conv_gates.weight.abs().mean()
+    G_weight_can = G.convgru.convgru.cell_list[0].conv_can.weight.abs().mean()
+    G_weight_first_layer = G.blocks[0][0].conv1.weight.abs().mean()
     G.optim.step()
 
     # If we have an ema, update it, regardless of if we test with it or not
@@ -121,6 +127,14 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
     tensor_writer.add_scalar('Loss/D_loss_fake', out['D_loss_fake'], iteration)
     tensor_writer.add_scalar('Loss/Dv_loss_fake', out['Dv_loss_fake'], iteration)
     tensor_writer.add_scalar('Loss/Dv_loss_real', out['Dv_loss_real'], iteration)
+
+    tensor_writer.add_scalar('Gradient/G_grad_gates', G_grad_gates, iteration)
+    tensor_writer.add_scalar('Gradient/G_grad_can', G_grad_can, iteration)
+    tensor_writer.add_scalar('Gradient/G_grad_first_layer', G_grad_first_layer, iteration)
+
+    tensor_writer.add_scalar('Weight/G_weight_gates', G_weight_gates, iteration)
+    tensor_writer.add_scalar('Weight/G_weight_can', G_weight_can, iteration)
+    tensor_writer.add_scalar('Weight/G_weight_first_layer', G_weight_first_layer, iteration)
     return out
   return train
 
