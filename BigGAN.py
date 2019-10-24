@@ -278,7 +278,12 @@ class Generator(nn.Module):
     for index, blocklist in enumerate(self.blocks):
       # Second inner loop in case block has multiple layers
       for block in blocklist:
-        ys_BT = ys[index].repeat(self.time_steps,1,1).permute(1,0,2).contiguous().view(-1,y.shape[-1])
+        # ys_BT = ys[index].repeat(self.time_steps,1,1).permute(1,0,2).contiguous().view(-1,y.shape[-1])
+        #xiaodan: added if else statement to account when G_shared==False
+        if len(y.shape)>1:
+            ys_BT = ys[index].repeat(self.time_steps,1,1).permute(1,0,2).contiguous().view(-1,y.shape[-1])
+        else:
+            ys_BT = ys[index].repeat(self.time_steps,1).permute(1,0).contiguous()
         # print('y and ys_BT shape',y.shape,ys_BT.shape)
         h = block(h, ys_BT) #[BT,C,H,W]
         # print('ys_BT', ys_BT.get_device())
