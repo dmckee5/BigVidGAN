@@ -22,6 +22,9 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
     G.optim.zero_grad()
     D.optim.zero_grad()
     Dv.optim.zero_grad()
+
+    if tensor_writer != None and iteration % 100 == 0:
+      tensor_writer.add_video('Loaded Data', (x + 1)/2, iteration)
     # How many chunks to split x and y into?
     x = torch.split(x, config['batch_size'])
     y = torch.split(y, config['batch_size'])
@@ -121,6 +124,7 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
             'Dv_loss_fake': float(Dv_loss_fake.item())}
     if tensor_writer != None and iteration % 100 == 0:
       tensor_writer.add_video('Video Results', (G_z + 1)/2, iteration)
+
     # Return G's loss and the components of D's loss.
     tensor_writer.add_scalar('Loss/G_loss', out['G_loss'], iteration)
     tensor_writer.add_scalar('Loss/D_loss_real', out['D_loss_real'], iteration)

@@ -37,10 +37,10 @@ def G_arch(ch=64, attention='64', ksize='333333', dilation='111111'):
                'resolution' : [8, 16, 32, 64, 128],
                'attention' : {2**i: (2**i in [int(item) for item in attention.split('_')])
                               for i in range(3,8)}}
-  arch[64]  = {'in_channels' :  [ch * item for item in [16, 16, 8, 4]],
-               'out_channels' : [ch * item for item in [16, 8, 4, 2]],
-               'upsample' : [True] * 4,
-               'resolution' : [8, 16, 32, 64],
+  arch[64]  = {'in_channels' :  [ch * item for item in [8, 8, 8, 4, 2]],
+               'out_channels' : [ch * item for item in [8, 8, 4, 2, 1]],
+               'upsample' : [True] * 4 + [False],
+               'resolution' : [8, 16, 32, 64, 64],
                'attention' : {2**i: (2**i in [int(item) for item in attention.split('_')])
                               for i in range(3,7)}}
   arch[32]  = {'in_channels' :  [ch * item for item in [4, 4, 4]],
@@ -192,10 +192,12 @@ class Generator(nn.Module):
       # If attention on this block, attach it to the end
       if self.arch['attention'][self.arch['resolution'][index]]:
         # xiaodan: add three seperable attention layers in G at certain resolution
-        print('Adding seperable attention layer in G at resolution %d' % self.arch['resolution'][index])
-        self.blocks[-1] += [layers.SelfAttention_width(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
-        self.blocks[-1] += [layers.SelfAttention_height(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
-        self.blocks[-1] += [layers.SelfAttention_time(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+        # print('Adding seperable attention layer in G at resolution %d' % self.arch['resolution'][index])
+        # self.blocks[-1] += [layers.SelfAttention_width(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+        # self.blocks[-1] += [layers.SelfAttention_height(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+        # self.blocks[-1] += [layers.SelfAttention_time(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+        print('Adding attention layer in G at resolution %d' % self.arch['resolution'][index])
+        self.blocks[-1] += [layers.Attention(self.arch['out_channels'][index], self.which_conv)]
 
     # Turn self.blocks into a ModuleList so that it's all properly registered.
     self.blocks = nn.ModuleList([nn.ModuleList(block) for block in self.blocks])
@@ -308,8 +310,8 @@ def D_img_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
                'resolution' : [64, 32, 16, 8, 4, 4],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,8)}}
-  arch[64]  = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8]],
-               'out_channels' : [item * ch for item in [1, 2, 4, 8, 16]],
+  arch[64]  = {'in_channels' :  [3] + [ch*item for item in [2, 4, 8, 16]],
+               'out_channels' : [item * ch for item in [2, 4, 8, 16, 16]],
                'downsample' : [True] * 4 + [False],
                'resolution' : [32, 16, 8, 4, 4],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
@@ -350,7 +352,7 @@ def D_vid_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
                'downsample' : [True, True, False, False],
                'resolution' : [16, 16, 16, 16],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
-                              for i in range(2,6)},
+                              for i in range(2,5)},
                 '3D resnet' :[True] * 2 + [False] * 2       }
   return arch
 
