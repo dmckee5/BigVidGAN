@@ -21,7 +21,8 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
   def train(x, y, tensor_writer = None, iteration=None):
     G.optim.zero_grad()
     D.optim.zero_grad()
-    Dv.optim.zero_grad()
+    if config['no_Dv'] == False:
+      Dv.optim.zero_grad()
 
     if tensor_writer != None and iteration % 100 == 0:
       tensor_writer.add_video('Loaded Data', (x + 1)/2, iteration)
@@ -33,13 +34,15 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
     # Optionally toggle D and G's "require_grad"
     if config['toggle_grads']:
       utils.toggle_grad(D, True)
-      utils.toggle_grad(Dv, True)
+      if config['no_Dv'] == False:
+        utils.toggle_grad(Dv, True)
       utils.toggle_grad(G, False)
 
     for step_index in range(config['num_D_steps']):
       # If accumulating gradients, loop multiple times before an optimizer step
       D.optim.zero_grad()
-      Dv.optim.zero_grad()
+      if config['no_Dv'] == False:
+        Dv.optim.zero_grad()
       for accumulation_index in range(config['num_D_accumulations']):
         z_.sample_()
         y_.sample_()
@@ -49,9 +52,14 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
         # print('hier and G_shared:',config['hier'],config['G_shared'])
         # print('Shape of z_[:config[batch_size]]:',z_[:config['batch_size']].shape)
         # print('config[batch_size]',config['batch_size'])
-        D_fake, D_real, Dv_fake, Dv_real, G_z = GD(z_[:config['batch_size']], y_[:config['batch_size']],
-                            x[counter], y[counter], train_G=False,
-                            split_D=config['split_D'])
+        if config['no_Dv'] == False:
+          D_fake, D_real, Dv_fake, Dv_real, G_z = GD(z_[:config['batch_size']], y_[:config['batch_size']],
+                              x[counter], y[counter], train_G=False,
+                              split_D=config['split_D'])
+        else:
+          D_fake, D_real, G_z = GD(z_[:config['batch_size']], y_[:config['batch_size']],
+                              x[counter], y[counter], train_G=False,
+                              split_D=config['split_D'])
         # print('GD.k in train_fns line 49',GD.module.k) #GD.module because GD is now dataparallel class
         # xiaodan: Make scores back to [B,k,1] for easier summation in discriminator_loss
         D_fake = D_fake.contiguous().view(-1,GD.module.k,*D_fake.shape[1:])
@@ -61,25 +69,33 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
         # Compute components of D's loss, average them, and divide by
         # the number of gradient accumulations
         D_loss_real, D_loss_fake = losses.discriminator_loss(D_fake, D_real)
-        Dv_loss_real, Dv_loss_fake = losses.discriminator_loss(Dv_fake, Dv_real)
-        D_loss = (D_loss_real + D_loss_fake + Dv_loss_fake + Dv_loss_real) / float(config['num_D_accumulations'])
+        if config['no_Dv'] == False:
+          Dv_loss_real, Dv_loss_fake = losses.discriminator_loss(Dv_fake, Dv_real)
+          D_loss = (D_loss_real + D_loss_fake + Dv_loss_fake + Dv_loss_real) / float(config['num_D_accumulations'])
+        else:
+          D_loss = (D_loss_real + D_loss_fake) / float(config['num_D_accumulations'])
         D_loss.backward()
         counter += 1
 
       # Optionally apply ortho reg in D
       if config['D_ortho'] > 0.0:
         # Debug print to indicate we're using ortho reg in D.
-        print('using modified ortho reg in D and Dv')
-        utils.ortho(D, config['D_ortho'])
-        utils.ortho(Dv, config['D_ortho'])
+        if config['no_Dv'] == False:
+          print('using modified ortho reg in D and Dv')
+          utils.ortho(Dv, config['D_ortho'])
+        else:
+          print('using modified ortho reg in D')
+          utils.ortho(D, config['D_ortho'])
 
       D.optim.step()
-      Dv.optim.step()
+      if config['no_Dv'] == False:
+        Dv.optim.step()
 
     # Optionally toggle "requires_grad"
     if config['toggle_grads']:
       utils.toggle_grad(D, False)
-      utils.toggle_grad(Dv, False)
+      if config['no_Dv'] == False:
+        utils.toggle_grad(Dv, False)
       utils.toggle_grad(G, True)
 
     # Zero G's gradients by default before training G, for safety
@@ -90,13 +106,17 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       z_.sample_()
       y_.sample_()
       # print('z_,y_ shapes before pass into GD:',z_.shape,y_.shape)
-      D_fake, Dv_fake, G_z= GD(z_, y_, train_G=True, split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
+      if config['no_Dv'] == False:
+        D_fake, Dv_fake, G_z= GD(z_, y_, train_G=True, split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
+      else:
+        D_fake, G_z= GD(z_, y_, train_G=True, split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
 
       D_fake = D_fake.contiguous().view(-1,GD.module.k,*D_fake.shape[1:])
       D_fake = torch.sum(D_fake,1) #xiaodan: add k scores before doing hinge loss, according to the paper
 
       G_loss = losses.generator_loss(D_fake) / float(config['num_G_accumulations'])
-      G_loss += losses.generator_loss(Dv_fake) / float(config['num_G_accumulations'])
+      if config['no_Dv'] == False:
+        G_loss += losses.generator_loss(Dv_fake) / float(config['num_G_accumulations'])
       G_loss.backward()
 
     # Optionally apply modified ortho reg in G
@@ -105,23 +125,28 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       # Don't ortho reg shared, it makes no sense. Really we should blacklist any embeddings for this
       utils.ortho(G, config['G_ortho'],
                   blacklist=[param for param in G.shared.parameters()])
-    G_grad_gates = G.convgru.convgru.cell_list[0].conv_gates.weight.grad.abs().sum()
-    G_grad_can = G.convgru.convgru.cell_list[0].conv_can.weight.grad.abs().sum()
-    G_grad_first_layer = G.blocks[0][0].conv1.weight.grad.abs().sum()
-    G_weight_gates = G.convgru.convgru.cell_list[0].conv_gates.weight.abs().mean()
-    G_weight_can = G.convgru.convgru.cell_list[0].conv_can.weight.abs().mean()
-    G_weight_first_layer = G.blocks[0][0].conv1.weight.abs().mean()
+    if config['no_convgru'] == False:
+      G_grad_gates = G.convgru.convgru.cell_list[0].conv_gates.weight.grad.abs().sum()
+      G_grad_can = G.convgru.convgru.cell_list[0].conv_can.weight.grad.abs().sum()
+      G_grad_first_layer = G.blocks[0][0].conv1.weight.grad.abs().sum()
+      G_weight_gates = G.convgru.convgru.cell_list[0].conv_gates.weight.abs().mean()
+      G_weight_can = G.convgru.convgru.cell_list[0].conv_can.weight.abs().mean()
+      G_weight_first_layer = G.blocks[0][0].conv1.weight.abs().mean()
     G.optim.step()
 
     # If we have an ema, update it, regardless of if we test with it or not
     if config['ema']:
       ema.update(state_dict['itr'])
-
-    out = {'G_loss': float(G_loss.item()),
-            'D_loss_real': float(D_loss_real.item()),
-            'D_loss_fake': float(D_loss_fake.item()),
-            'Dv_loss_real': float(Dv_loss_real.item()),
-            'Dv_loss_fake': float(Dv_loss_fake.item())}
+    if config['no_Dv'] == False:
+      out = {'G_loss': float(G_loss.item()),
+              'D_loss_real': float(D_loss_real.item()),
+              'D_loss_fake': float(D_loss_fake.item()),
+              'Dv_loss_real': float(Dv_loss_real.item()),
+              'Dv_loss_fake': float(Dv_loss_fake.item())}
+    else:
+      out = {'G_loss': float(G_loss.item()),
+              'D_loss_real': float(D_loss_real.item()),
+              'D_loss_fake': float(D_loss_fake.item())}
     if tensor_writer != None and iteration % 100 == 0:
       tensor_writer.add_video('Video Results', (G_z + 1)/2, iteration)
 
@@ -129,16 +154,17 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
     tensor_writer.add_scalar('Loss/G_loss', out['G_loss'], iteration)
     tensor_writer.add_scalar('Loss/D_loss_real', out['D_loss_real'], iteration)
     tensor_writer.add_scalar('Loss/D_loss_fake', out['D_loss_fake'], iteration)
-    tensor_writer.add_scalar('Loss/Dv_loss_fake', out['Dv_loss_fake'], iteration)
-    tensor_writer.add_scalar('Loss/Dv_loss_real', out['Dv_loss_real'], iteration)
+    if config['no_Dv'] == False:
+      tensor_writer.add_scalar('Loss/Dv_loss_fake', out['Dv_loss_fake'], iteration)
+      tensor_writer.add_scalar('Loss/Dv_loss_real', out['Dv_loss_real'], iteration)
+    if config['no_convgru'] == False:
+      tensor_writer.add_scalar('Gradient/G_grad_gates', G_grad_gates, iteration)
+      tensor_writer.add_scalar('Gradient/G_grad_can', G_grad_can, iteration)
+      tensor_writer.add_scalar('Gradient/G_grad_first_layer', G_grad_first_layer, iteration)
 
-    tensor_writer.add_scalar('Gradient/G_grad_gates', G_grad_gates, iteration)
-    tensor_writer.add_scalar('Gradient/G_grad_can', G_grad_can, iteration)
-    tensor_writer.add_scalar('Gradient/G_grad_first_layer', G_grad_first_layer, iteration)
-
-    tensor_writer.add_scalar('Weight/G_weight_gates', G_weight_gates, iteration)
-    tensor_writer.add_scalar('Weight/G_weight_can', G_weight_can, iteration)
-    tensor_writer.add_scalar('Weight/G_weight_first_layer', G_weight_first_layer, iteration)
+      tensor_writer.add_scalar('Weight/G_weight_gates', G_weight_gates, iteration)
+      tensor_writer.add_scalar('Weight/G_weight_can', G_weight_can, iteration)
+      tensor_writer.add_scalar('Weight/G_weight_first_layer', G_weight_first_layer, iteration)
     return out
   return train
 

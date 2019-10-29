@@ -68,7 +68,10 @@ def run(config):
   # Next, build the model
   G = model.Generator(**config).to(device)
   D = model.ImageDiscriminator(**config).to(device)
-  Dv = model.VideoDiscriminator(**config).to(device)
+  if config['no_Dv'] == False:
+    Dv = model.VideoDiscriminator(**config).to(device)
+  else:
+    Dv = None
 
    # If using EMA, prepare it
   if config['ema']:
@@ -88,14 +91,19 @@ def run(config):
   if config['D_fp16']:
     print('Casting D to fp16...')
     D = D.half()
-    Dv = Dv.half()
+    if config['no_Dv'] == False:
+      Dv = Dv.half()
     # Consider automatically reducing SN_eps?
   GD = model.G_D(G, D,Dv, config['k']) #xiaodan: add an argument k
-  print('GD.k in train.py line 91',GD.k)
+  # print('GD.k in train.py line 91',GD.k)
   # print(G) # xiaodan: print disabled by xiaodan. Too many stuff
   # print(D)
-  print('Number of params in G: {} D: {} Dv: {}'.format(
-    *[sum([p.data.nelement() for p in net.parameters()]) for net in [G,D, Dv]]))
+  if config['no_Dv'] == False:
+    print('Number of params in G: {} D: {} Dv: {}'.format(
+      *[sum([p.data.nelement() for p in net.parameters()]) for net in [G,D, Dv]]))
+  else:
+    print('Number of params in G: {} D: {}'.format(
+      *[sum([p.data.nelement() for p in net.parameters()]) for net in [G,D]]))
   # Prepare state dict, which holds things like epoch # and itr #
   state_dict = {'itr': 0, 'epoch': 0, 'save_num': 0, 'save_best_num': 0,
                 'best_IS': 0, 'best_FID': 999999, 'config': config}
@@ -134,8 +142,12 @@ def run(config):
   # a full D iteration (regardless of number of D steps and accumulations)
   D_batch_size = (config['batch_size'] * config['num_D_steps']
                   * config['num_D_accumulations'])
-  loaders = utils.get_video_data_loaders(**{**config, 'batch_size': D_batch_size,
-                                      'start_itr': state_dict['itr']})
+  if config['dataset'] == 'C10':
+    loaders = utils.get_video_cifar_data_loader(**{**config, 'batch_size': D_batch_size,
+                                        'start_itr': state_dict['itr']})
+  else:
+    loaders = utils.get_video_data_loaders(**{**config, 'batch_size': D_batch_size,
+                                        'start_itr': state_dict['itr']})
   # print(loaders)
   # print(loaders[0])
 
@@ -192,7 +204,8 @@ def run(config):
       # For D, which typically doesn't have BN, this shouldn't matter much.
       G.train()
       D.train()
-      Dv.train()
+      if config['no_Dv'] == False:
+        Dv.train()
       if config['ema']:
         G_ema.train()
       if config['D_fp16']:
@@ -204,8 +217,12 @@ def run(config):
 
       # Every sv_log_interval, log singular values
       if (config['sv_log_interval'] > 0) and (not (state_dict['itr'] % config['sv_log_interval'])):
-        train_log.log(itr=int(state_dict['itr']),
-                      **{**utils.get_SVs(G, 'G'), **utils.get_SVs(D, 'D'), **utils.get_SVs(Dv, 'Dv')})
+        if config['no_Dv'] == False:
+          train_log.log(itr=int(state_dict['itr']),
+                        **{**utils.get_SVs(G, 'G'), **utils.get_SVs(D, 'D'), **utils.get_SVs(Dv, 'Dv')})
+        else:
+          train_log.log(itr=int(state_dict['itr']),
+                        **{**utils.get_SVs(G, 'G'), **utils.get_SVs(D, 'D')})
 
       # If using my progbar, print metrics.
       if config['pbar'] == 'mine':

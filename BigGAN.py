@@ -108,6 +108,11 @@ class Generator(nn.Module):
     self.fp16 = G_fp16
     # Architecture dict
     self.arch = G_arch(self.ch, self.attention)[resolution]
+    # xiaodan: added these flags
+    self.no_convgru = kwargs['no_convgru']
+    self.no_Dv = kwargs['no_Dv']
+    self.no_sepa_attn = kwargs['no_sepa_attn']
+    self.no_full_attn = kwargs['no_full_attn']
 
     # If using hierarchical latents, adjust z
     if self.hier:
@@ -152,6 +157,7 @@ class Generator(nn.Module):
 
     # Prepare model
     # If not using shared embeddings, self.shared is just a passthrough
+    print('G_shared?', self.G_shared)
     self.shared = (self.which_embedding(n_classes, self.shared_dim) if G_shared
                     else layers.identity())
     # First linear layer
@@ -162,7 +168,9 @@ class Generator(nn.Module):
     # xiaodan: not sure if ch0 should be self.arch['in_channels'][0]
     # xiaodan: hidden_dim is also output dimension, which should alse be ch0
     # print('dim_z:',self.dim_z,'shared_dim:',self.shared_dim)
-    self.convgru = ConvGRULinear(noise_size=self.dim_z+self.shared_dim,
+    if self.no_convgru == False:
+      convgru_noise_size = self.dim_z+self.shared_dim if self.G_shared else self.dim_z
+      self.convgru = ConvGRULinear(noise_size=convgru_noise_size,
                                  ch0=self.arch['in_channels'][0],
                                  time_steps=self.time_steps,
                                  input_size=(self.bottom_width,self.bottom_width),
@@ -173,7 +181,8 @@ class Generator(nn.Module):
                                  batch_first=True)
     # xiaodan: full-attn layers
     # xiaodan: not sure if this is ch0
-    self.fullAttn = layers.FullAttention(ch=self.arch['in_channels'][0],
+    if self.no_full_attn == False:
+      self.fullAttn = layers.FullAttention(ch=self.arch['in_channels'][0],
                                          time_steps=self.time_steps)
                                          # which_conv = self.which_conv) #xiaodan: commented by xiaodan to use the default SNConv3d
     # self.blocks is a doubly-nested list of modules, the outer loop intended
@@ -191,13 +200,17 @@ class Generator(nn.Module):
 
       # If attention on this block, attach it to the end
       if self.arch['attention'][self.arch['resolution'][index]]:
-        # xiaodan: add three seperable attention layers in G at certain resolution
-        # print('Adding seperable attention layer in G at resolution %d' % self.arch['resolution'][index])
-        # self.blocks[-1] += [layers.SelfAttention_width(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
-        # self.blocks[-1] += [layers.SelfAttention_height(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
-        # self.blocks[-1] += [layers.SelfAttention_time(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
-        print('Adding attention layer in G at resolution %d' % self.arch['resolution'][index])
-        self.blocks[-1] += [layers.Attention(self.arch['out_channels'][index], self.which_conv)]
+        if self.no_sepa_attn == False:
+          # xiaodan: add three seperable attention layers in G at certain resolution
+          print('Adding seperable attention layer in G at resolution %d' % self.arch['resolution'][index])
+          self.blocks[-1] += [layers.SelfAttention_width(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+          self.blocks[-1] += [layers.SelfAttention_height(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+          self.blocks[-1] += [layers.SelfAttention_time(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
+
+        else:
+          print('Adding attention layer in G at resolution %d' % self.arch['resolution'][index])
+          self.blocks[-1] += [layers.Attention(self.arch['out_channels'][index], self.which_conv)]
+
 
     # Turn self.blocks into a ModuleList so that it's all properly registered.
     self.blocks = nn.ModuleList([nn.ModuleList(block) for block in self.blocks])
@@ -264,18 +277,28 @@ class Generator(nn.Module):
       ys = [torch.cat([y, item], 1) for item in zs[1:]]
     else:
       ys = [y] * len(self.blocks)
-    # print(z.shape,y.shape)
+    # print(z.shape,y.shape, type(z),type(y))
     # xiaodan: concatenate z and y, then send into convgru
-    zy = torch.cat((z,y),1)
+    if self.no_convgru == False:
+      if self.G_shared:
+        zy = torch.cat((z,y),1) # [B, 240]
+      else:
+        zy = z
+      layer_output_list, last_state_list = self.convgru(zy)
+      h = layer_output_list[-1] #[B,T,C,4,4]
+      h = h.contiguous().view(-1,*h.shape[2:]) #[BT,C,4,4]
+    else:
+      h = self.linear(z)
+      h = h.view(h.size(0), -1, self.bottom_width, self.bottom_width) #[B*1, C, 4, 4]
     # print('dim zy:',zy.shape)
     # First linear layer
-    layer_output_list, last_state_list = self.convgru(zy)
-    h = layer_output_list[-1] #[B,T,C,H,W]
+
     # print('H shape after convgru',h.shape)
     #xiaodan: send h into full Attention
+    if self.no_full_attn == False:
+      h = self.fullAttn(h)#[B,T,C,4,4]
 
-    h = self.fullAttn(h)#[B,T,C,H,W]
-    h = h.contiguous().view(-1,*h.shape[2:]) #[BT,C,H,W]
+      h = h.contiguous().view(-1,*h.shape[2:]) #[BT,C,4,4]
     # Loop over blocks
     for index, blocklist in enumerate(self.blocks):
       # Second inner loop in case block has multiple layers
@@ -319,7 +342,7 @@ def D_img_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
   arch[32]  = {'in_channels' :  [3] + [item * ch for item in [4, 4, 4]],
                'out_channels' : [item * ch for item in [4, 4, 4, 4]],
                'downsample' : [True, True, False, False],
-               'resolution' : [16, 16, 16, 16],
+               'resolution' : [16, 8, 8, 8],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,6)}}
   return arch
@@ -347,13 +370,13 @@ def D_vid_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,6)},
                '3D resnet' :[True] * 2 + [False] * 2       }
-  arch[32]  = {'in_channels' :  [3] + [item * ch for item in [4, 4, 4]],
-               'out_channels' : [item * ch for item in [4, 4, 4, 4]],
-               'downsample' : [True, True, False, False],
-               'resolution' : [16, 16, 16, 16],
+  arch[32]  = {'in_channels' :  [3] + [item * ch for item in [4, 4]],
+               'out_channels' : [item * ch for item in [4, 4, 4]],
+               'downsample' : [True, True, False],
+               'resolution' : [8, 4, 4],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
-                              for i in range(2,5)},
-                '3D resnet' :[True] * 2 + [False] * 2       }
+                              for i in range(2,4)},
+                '3D resnet' :[True] * 2 + [False]       }
   return arch
 
 class ImageDiscriminator(nn.Module):
@@ -653,7 +676,7 @@ class VideoDiscriminator(nn.Module):
 # Parallelized G_D to minimize cross-gpu communication
 # Without this, Generator outputs would get all-gathered and then rebroadcast.
 class G_D(nn.Module):
-  def __init__(self, G, D, Dv, k=8):
+  def __init__(self, G, D, Dv = None, k=8):
     super(G_D, self).__init__()
     self.G = G
     self.D = D
@@ -678,29 +701,44 @@ class G_D(nn.Module):
         G_z = G_z.half()
     #xiaodan: need to sample for k frames
     import utils
-    sampled_G_z,sampled_gy = utils.sample_frames(G_z,gy,self.k) # [B,8,C,H,W], [B,8,120]
-    sampled_G_z = sampled_G_z.contiguous().view(-1,*G_z.shape[2:])# [B*8,C,H,W]
-    sampled_gy = sampled_gy.contiguous().view(-1,*gy.shape[2:]) # [B*8,120]
+    if self.k > 1:
+      sampled_G_z,sampled_gy = utils.sample_frames(G_z,gy,self.k) # [B,8,C,H,W], [B,8,120]
+      sampled_G_z = sampled_G_z.contiguous().view(-1,*G_z.shape[2:])# [B*8,C,H,W]
+      sampled_gy = sampled_gy.contiguous().view(-1,*gy.shape[2:]) # [B*8,120]
+    else:
+      sampled_G_z, sampled_gy = G_z.squeeze(), gy
     if x is not None and dy is not None:
       # print('x and dy shape',x.shape,dy.shape)
-      sampled_x, sampled_dy = utils.sample_frames(x,dy,self.k) # [B,8,C,H,W], [B,8,120]
-      sampled_x = sampled_x.contiguous().view(-1,*x.shape[2:])# [B*8,C,H,W]
-      sampled_dy = sampled_dy.contiguous().view(-1,*dy.shape[2:]) # [B*8,120]
+      if self.k > 1:
+        sampled_x, sampled_dy = utils.sample_frames(x,dy,self.k) # [B,8,C,H,W], [B,8,120]
+        sampled_x = sampled_x.contiguous().view(-1,*x.shape[2:])# [B*8,C,H,W]
+        sampled_dy = sampled_dy.contiguous().view(-1,*dy.shape[2:]) # [B*8,120]
+      else:
+        sampled_x, sampled_dy = x.squeeze(), dy
 
     # Split_D means to run D once with real data and once with fake,
     # rather than concatenating along the batch dimension.
     if split_D:
       D_fake = self.D(sampled_G_z, sampled_gy)
-      Dv_fake = self.Dv(G_z, gy)
+      if self.Dv != None:
+        Dv_fake = self.Dv(G_z, gy)
       if x is not None:
         D_real = self.D(sampled_x, sampled_dy)
-        Dv_real = self.Dv(x, dy)
-        return D_fake, D_real, Dv_fake, Dv_real, G_z
+        if self.Dv != None:
+          Dv_real = self.Dv(x, dy)
+          return D_fake, D_real, Dv_fake, Dv_real, G_z
+        else:
+          return D_fake, D_real, G_z
       else:
         if return_G_z:
-          return D_fake, sampled_G_z, Dv_fake, G_z
+          if self.Dv != None:
+            return D_fake, sampled_G_z, Dv_fake, G_z
+          else:
+            return D_fake, sampled_G_z, G_z
         else:
-          return D_fake, Dv_fake, G_z
+          if self.Dv != None:
+            return D_fake, Dv_fake, G_z
+          return D_fake, G_z
     # If real data is provided, concatenate it with the Generator's output
     # along the batch dimension for improved efficiency.
     else:
@@ -710,12 +748,23 @@ class G_D(nn.Module):
       Dv_class = torch.cat([gy, dy], 0) if dy is not None else gy
       # Get Discriminator output
       D_out = self.D(D_input, D_class)
-      Dv_out = self.Dv(Dv_input, Dv_class)
+      if self.Dv != None:
+        Dv_out = self.Dv(Dv_input, Dv_class)
       if x is not None:
-        D_out_fake, D_out_real, Dv_out_fake, Dv_out_real = list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]])) + list(torch.split(Dv_out, [G_z.shape[0], x.shape[0]])) # D_fake, D_real
-        return D_out_fake, D_out_real, Dv_out_fake, Dv_out_real, G_z
+        if self.Dv != None:
+          D_out_fake, D_out_real, Dv_out_fake, Dv_out_real = list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]])) + list(torch.split(Dv_out, [G_z.shape[0], x.shape[0]])) # D_fake, D_real
+          return D_out_fake, D_out_real, Dv_out_fake, Dv_out_real, G_z
+        else:
+          D_out_fake, D_out_real = list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]]))  # D_fake, D_real
+          return D_out_fake, D_out_real, G_z
       else:
         if return_G_z:
-          return D_out, sampled_G_z, Dv_out, G_z
+          if self.Dv != None:
+            return D_out, sampled_G_z, Dv_out, G_z
+          else:
+            return D_out, sampled_G_z, G_z
         else:
-          return D_out, Dv_out, G_z
+          if self.Dv != None:
+            return D_out, Dv_out, G_z
+          else:
+            return D_out, G_z

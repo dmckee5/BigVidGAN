@@ -148,6 +148,18 @@ def prepare_parser():
     '--norm_style', type=str, default='bn',
     help='Normalizer style for G, one of bn [batchnorm], in [instancenorm], '
          'ln [layernorm], gn [groupnorm] (default: %(default)s)')
+  parser.add_argument(
+    '--no_convgru', action='store_true', default=False,
+    help='Turn off convgru in G?(default: %(default)s)')
+  parser.add_argument(
+    '--no_full_attn', action='store_true', default=False,
+    help='Turn off full attention in G?(default: %(default)s)')
+  parser.add_argument(
+    '--no_sepa_attn', action='store_true', default=False,
+    help='Turn off separate attention in G?(default: %(default)s)')
+  parser.add_argument(
+    '--no_Dv', action='store_true', default=False,
+    help='Turn off video discriminator in G?(default: %(default)s)')
 
   ### Model init stuff ###
   parser.add_argument(
@@ -605,6 +617,57 @@ def get_data_loaders(dataset, data_root=None, augment=False, batch_size=64,
   loaders.append(train_loader)
   return loaders
 
+def get_video_cifar_data_loader(dataset, data_root=None, augment=False, batch_size=64,
+                     num_workers=8, shuffle=True, load_in_mem=False, hdf5=False,
+                     pin_memory=True, drop_last=True, start_itr=0,
+                     num_epochs=500, use_multiepoch_sampler=False,
+                     **kwargs):
+
+  # data_root += '/%s' % root_dict[dataset]
+  print('Using dataset root location %s' % data_root)
+
+  which_dataset = dset_dict[dataset]
+  norm_mean = [0.5,0.5,0.5]
+  norm_std = [0.5,0.5,0.5]
+  image_size = imsize_dict[dataset]
+  # For image folder datasets, name of the file where we store the precomputed
+  # image locations to avoid having to walk the dirs every time we load.
+  # dataset_kwargs = {'index_filename': '%s_imgs.npz' % dataset}
+
+  # HDF5 datasets have their own inbuilt transform, no need to train_transform
+  if 'hdf5' in dataset:
+    train_transform = None
+  else:
+    if augment:
+      print('Data will be augmented...')
+      if dataset in ['C10', 'C100']:
+        train_transform = [transforms.RandomCrop(32, padding=4),
+                           transforms.RandomHorizontalFlip()]
+      else:
+        train_transform = [RandomCropLongEdge(),
+                         transforms.Resize(image_size),
+                         transforms.RandomHorizontalFlip()]
+    else:
+      print('Data will not be augmented...')
+      if dataset in ['C10', 'C100']:
+        train_transform = []
+      else:
+        train_transform = [CenterCropLongEdge(), transforms.Resize(image_size)]
+      # train_transform = [transforms.Resize(image_size), transforms.CenterCrop]
+    train_transform = transforms.Compose(train_transform + [
+                     transforms.ToTensor(),
+                     transforms.Normalize(norm_mean, norm_std)])
+  train_set = dset.videoCIFAR10(root=data_root, transform=train_transform,
+                            load_in_mem=load_in_mem)
+
+  # Prepare loader; the loaders list is for forward compatibility with
+  # using validation / test splits.
+
+  loader_kwargs = {'num_workers': num_workers, 'pin_memory': pin_memory,
+                   'drop_last': drop_last} # Default, drop last incomplete batch
+  train_loader = DataLoader(train_set, batch_size=batch_size,
+                            shuffle=shuffle, **loader_kwargs)
+  return [train_loader]
 
 def get_video_data_loaders(dataset, data_root=None, annotation_path=None, augment=False, batch_size=64,
                      time_steps=12, frames_between_clips=10e6,
@@ -753,10 +816,11 @@ def save_weights(G, D, Dv, state_dict, weights_root, experiment_name,
               '%s/%s.pth' % (root, join_strings('_', ['D', name_suffix])))
   torch.save(D.optim.state_dict(),
               '%s/%s.pth' % (root, join_strings('_', ['D_optim', name_suffix])))
-  torch.save(Dv.state_dict(),
-              '%s/%s.pth' % (root, join_strings('_', ['Dv', name_suffix])))
-  torch.save(Dv.optim.state_dict(),
-              '%s/%s.pth' % (root, join_strings('_', ['Dv_optim', name_suffix])))
+  if Dv is not None:
+    torch.save(Dv.state_dict(),
+                '%s/%s.pth' % (root, join_strings('_', ['Dv', name_suffix])))
+    torch.save(Dv.optim.state_dict(),
+                '%s/%s.pth' % (root, join_strings('_', ['Dv_optim', name_suffix])))
   torch.save(state_dict,
               '%s/%s.pth' % (root, join_strings('_', ['state_dict', name_suffix])))
   if G_ema is not None:

@@ -352,12 +352,30 @@ class CIFAR10(dset.CIFAR10):
   def __len__(self):
       return len(self.data)
 
+class videoCIFAR10(CIFAR10):
+    def __init__(self, root, train=True,
+         transform=None, target_transform=None,
+         download=True, validate_seed=0,
+         val_split=0, load_in_mem=True, **kwargs):
+         super().__init__(root, train,
+         transform, target_transform,
+         download, validate_seed,
+         val_split, load_in_mem, **kwargs)
+    def __getitem__(self,index):
+        img, target = super().__getitem__(index)
+        return torch.unsqueeze(img, dim=0), target
+
+    def __len__(self):
+        return super().__len__()
+
+
+
 class UCF101(data.Dataset):
 
   # def __init__(self, root, transform=None, video_len=12):
   #   self.file = os.path.expanduser(root)
   #   self.video_len = video_len
-  #   self.transform =transform 
+  #   self.transform =transform
   #   with h5.File(self.file, 'r') as f:
   #     self.data_len = len(f['labels'])
 
@@ -366,7 +384,7 @@ class UCF101(data.Dataset):
   #     start, stop = f['timestamp'][index]
   #     labels = f['labels'][index]
   #     if stop - start > self.video_len:
-  #       start_rand = np.random.randint(start, stop - self.video_len) 
+  #       start_rand = np.random.randint(start, stop - self.video_len)
   #       video = f['videos'][index][start_rand: stop]
   #     else:
   #       video = f['videos'][index][start: stop]
@@ -418,7 +436,7 @@ class UCF101(data.Dataset):
     if self.transforms != None:
       clip = self.transforms(clip)
     label = self.samples[video_idx][1]
-    
+
     return clip, label
 
   def __len__(self):
@@ -476,7 +494,7 @@ class VideoNormalize(object):
     self.mean = mean
     self.std = std
     self.inplace = inplace
-  
+
 
   def __call__(self, clip):
     """
@@ -513,7 +531,7 @@ class ToTensorVideo(object):
   """
   def __init__(self):
     pass
-    
+
   def __call__(self, clip):
     """
     Args:
