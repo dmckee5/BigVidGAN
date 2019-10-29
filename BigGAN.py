@@ -182,6 +182,7 @@ class Generator(nn.Module):
     # xiaodan: full-attn layers
     # xiaodan: not sure if this is ch0
     if self.no_full_attn == False:
+      print('Using full attention module...')
       self.fullAttn = layers.FullAttention(ch=self.arch['in_channels'][0],
                                          time_steps=self.time_steps)
                                          # which_conv = self.which_conv) #xiaodan: commented by xiaodan to use the default SNConv3d
@@ -202,7 +203,7 @@ class Generator(nn.Module):
       if self.arch['attention'][self.arch['resolution'][index]]:
         if self.no_sepa_attn == False:
           # xiaodan: add three seperable attention layers in G at certain resolution
-          print('Adding seperable attention layer in G at resolution %d' % self.arch['resolution'][index])
+          print('Adding separable attention layer in G at resolution %d' % self.arch['resolution'][index])
           self.blocks[-1] += [layers.SelfAttention_width(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
           self.blocks[-1] += [layers.SelfAttention_height(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
           self.blocks[-1] += [layers.SelfAttention_time(self.arch['out_channels'][index], self.time_steps,self.which_conv)]
@@ -286,10 +287,11 @@ class Generator(nn.Module):
         zy = z
       layer_output_list, last_state_list = self.convgru(zy)
       h = layer_output_list[-1] #[B,T,C,4,4]
-      h = h.contiguous().view(-1,*h.shape[2:]) #[BT,C,4,4]
+      # h = h.contiguous().view(-1,*h.shape[2:]) #[BT,C,4,4]
     else:
       h = self.linear(z)
-      h = h.view(h.size(0), -1, self.bottom_width, self.bottom_width) #[B*1, C, 4, 4]
+      # print('h size at 293',h.shape)
+      h = h.contiguous().view(h.size(0), self.time_steps, -1, self.bottom_width, self.bottom_width) #[B, 1, C, 4, 4]
     # print('dim zy:',zy.shape)
     # First linear layer
 
