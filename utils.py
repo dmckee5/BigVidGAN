@@ -658,7 +658,7 @@ def get_video_cifar_data_loader(dataset, data_root=None, augment=False, batch_si
                      transforms.ToTensor(),
                      transforms.Normalize(norm_mean, norm_std)])
   train_set = dset.videoCIFAR10(root=data_root, transform=train_transform,
-                            load_in_mem=load_in_mem)
+                            load_in_mem=load_in_mem, time_steps = kwargs['time_steps'])
 
   # Prepare loader; the loaders list is for forward compatibility with
   # using validation / test splits.

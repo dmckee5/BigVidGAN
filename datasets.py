@@ -361,9 +361,10 @@ class videoCIFAR10(CIFAR10):
          transform, target_transform,
          download, validate_seed,
          val_split, load_in_mem, **kwargs)
+         self.time_steps = kwargs['time_steps']
     def __getitem__(self,index):
         img, target = super().__getitem__(index)
-        return torch.unsqueeze(img, dim=0), target
+        return torch.unsqueeze(img, dim=0).repeat(self.time_steps,1,1,1), target
 
     def __len__(self):
         return super().__len__()
