@@ -14,7 +14,8 @@ import torchvision.io as io
 from torchvision.datasets.utils import download_url, check_integrity
 import torch.utils.data as data
 from torch.utils.data import DataLoader
-from torchvision.datasets.video_utils import VideoClips
+# from torchvision.datasets.video_utils import VideoClips
+from VideoClips2 import VideoClips
 from torchvision.datasets.utils import list_dir
 import numbers
 from glob import glob
@@ -408,7 +409,8 @@ class UCF101(data.Dataset):
     class_to_idx = {classes[i]: i for i in range(len(classes))}
     self.samples = self.make_dataset(root, class_to_idx, extensions, is_valid_file=None)
     video_list = [x[0] for x in self.samples]
-    self.video_clips = VideoClips(glob(root+'/**/*'), clip_length_in_frames, frames_between_clips,frame_rate=frame_rate)
+
+    self.video_clips = VideoClips(sorted(glob(root+'/**/*')), clip_length_in_frames, frames_between_clips,frame_rate=frame_rate,num_workers=8)
     self.transforms = transforms
 
   def make_dataset(self, dir, class_to_idx, extensions=None, is_valid_file=None):
@@ -433,7 +435,11 @@ class UCF101(data.Dataset):
     return samples
 
   def __getitem__(self, index):
+    # index = 0
     clip, audio, info, video_idx = self.video_clips.get_clip(index)
+    # print('NUM_CLIPS!!!: ', self.video_clips.num_clips(), 'NUM_VIDEOS: ', self.video_clips.num_videos())
+    # print('VideoClips files: ', ' | '.join(self.video_clips.video_paths))
+    # print('video_idx: ', video_idx, 'index: ', index)
     if self.transforms != None:
       clip = self.transforms(clip)
     label = self.samples[video_idx][1]
@@ -456,6 +462,55 @@ def _is_tensor_video_clip(clip):
         raise ValueError("clip should be 4D. Got %dD" % clip.dim())
 
     return True
+#xiaodan: added by xiaodan
+def resize(clip, target_size, interpolation_mode="area"):
+    assert len(target_size) == 2, "target size should be tuple (height, width)"
+    return torch.nn.functional.interpolate(
+        clip, size=target_size, mode=interpolation_mode
+    )
+#xiaodan: added by xiaodan
+class VideoResizedCenterCrop(object):
+  """Crops the given video at the center.
+  Args:
+      size (sequence or int): Desired output size of the crop. If size is an
+          int instead of sequence like (h, w), a square crop (size, size) is
+          made.
+    """
+
+  def __init__(self, size):
+    if isinstance(size, numbers.Number):
+      self.size = (int(size), int(size))
+    else:
+      self.size = size
+
+  def __call__(self, clip):
+    """
+    Args:
+        clip (tensor): Clip to be cropped. [C,T,H,W]
+    Returns:
+        clip (tensor): Cropped clip. [C,T,H,W]
+      """
+    # print(clip.dtype)
+    clip = clip.float()
+    h, w = clip.shape[-2:]
+    th, tw = self.size
+    min_shape, min_shape_i= min((v,i) for i,v in enumerate([h,w]))
+    if min_shape_i == 0:
+      target_size = (th,int(round(tw*w/h)))
+    else:
+      target_size = (int(round(th*h/w)),tw)
+
+    resized_clip = resize(clip,target_size)
+    # print('clip and resized clip sizes',clip.shape,resized_clip.shape)
+    rh, rw = resized_clip.shape[-2:]
+    i = int(round((rh - th) / 2.))
+    j = int(round((rw - tw) / 2.))
+    # print('i and j','(',i,',',i+th,')','(',j,',',j+tw,')')
+    return resized_clip[..., i:(i + th), j:(j + tw)]
+
+
+  def __repr__(self):
+    return self.__class__.__name__ + '(size={0})'.format(self.size)
 
 class VideoCenterCrop(object):
   """Crops the given video at the center.
@@ -474,9 +529,9 @@ class VideoCenterCrop(object):
   def __call__(self, clip):
     """
     Args:
-        img (PIL Image): Image to be cropped.
+        clip (tensor): Clip to be cropped. [C,T,H,W]
     Returns:
-        PIL Image: Cropped image.
+        clip (tensor): Cropped clip. [C,T,H,W]
       """
     h, w = clip.shape[-2:]
     th, tw = self.size

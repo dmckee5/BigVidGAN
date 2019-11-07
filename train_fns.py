@@ -8,6 +8,8 @@ import os
 
 import utils
 import losses
+from torchvision.datasets.utils import list_dir
+
 
 
 # Dummy training function for debugging
@@ -18,6 +20,8 @@ def dummy_training_function():
 
 
 def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
+  classes = list(sorted(list_dir(config['data_root'])))
+  idx_to_classes = {i: classes[i] for i in range(len(classes))}
   def train(x, y, tensor_writer = None, iteration=None):
     G.optim.zero_grad()
     D.optim.zero_grad()
@@ -26,6 +30,11 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
 
     if tensor_writer != None and iteration % 100 == 0:
       tensor_writer.add_video('Loaded Data', (x + 1)/2, iteration)
+      y_text=[]
+      for yi in y:
+        y_text.append(idx_to_classes[yi.item()])
+      tensor_writer.add_text('Loaded Labels',' | '.join(y_text),iteration)
+    # print('Range of loaded data:',x.min(),'--',x.max())
     # How many chunks to split x and y into?
     x = torch.split(x, config['batch_size'])
     y = torch.split(y, config['batch_size'])
