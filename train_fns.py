@@ -158,6 +158,10 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
               'D_loss_fake': float(D_loss_fake.item())}
     if tensor_writer != None and iteration % 100 == 0:
       tensor_writer.add_video('Video Results', (G_z + 1)/2, iteration)
+      y_Gz_text=[]
+      for yi in y_:
+        y_Gz_text.append(idx_to_classes[yi.item()])
+      tensor_writer.add_text('Generated Labels',' | '.join(y_Gz_text),iteration)
 
     # Return G's loss and the components of D's loss.
     tensor_writer.add_scalar('Loss/G_loss', out['G_loss'], iteration)

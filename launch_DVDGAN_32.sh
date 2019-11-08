@@ -8,7 +8,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 /usr/bin/python3 train.py \
 --dataset UCF101_32 --annotation_file '/home/nfs/data/trainlist01.txt' --parallel --shuffle \
 --num_workers 8 --batch_size 48 --load_in_mem  \
 --num_G_accumulations 1 --num_D_accumulations 1 --num_epochs 5000 \
---num_D_steps 4 --G_lr 2e-4 --D_lr 2e-4 --D_B2 0.999 --G_B2 0.999 \
+--num_D_steps 1 --G_lr 2e-4 --D_lr 2e-4 --D_B2 0.999 --G_B2 0.999 \
 --G_attn 32 --D_attn 0 \
 --time_steps 12 \
 --k 8 --frames_between_clips 1000000 \
