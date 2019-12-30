@@ -7,6 +7,11 @@ import sys
 from PIL import Image
 import numpy as np
 from tqdm import tqdm, trange
+import matplotlib.pyplot as plt
+import random
+import pandas as pd
+from multiprocessing import Pool
+# from joblib import Parallel, delayed
 
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
@@ -370,6 +375,122 @@ class videoCIFAR10(CIFAR10):
     def __len__(self):
         return super().__len__()
 
+class vid2frame_dataset(data.Dataset):
+  """docstring for video_dataset"""
+  def __init__(self, cache_csv_path, data_root=None, save_path=None, label_csv_path=None, extensions=None, clip_length_in_frames=12, frame_rate=12, transforms = None, cache_exists=False):
+    super(vid2frame_dataset, self).__init__()
+    """
+      The constructor for vid2frame_dataset class
+
+    Parameters
+      ----------
+    data_root : str(or None)
+      The path to the directory with all the videos
+    save_path : str(or None)
+      The path to the directory where the frames should be saved
+        label_csv_path : str(or None)
+          The path to the csv file which contains class labels
+        cache_csv_path : str(or None)
+          The path to the csv file where the cache will be saved
+        extensions : list(or None)
+          The path to the csv file where the cache will be saved
+        clip_length_in_frames : int
+          Number of frames to be returned to the dataloader
+        frame_path : int
+          Frame rate at which the jpeg frames will be written
+        transforms : list(or None)
+          The transforms that are to be applied to the clip
+    """
+
+    self.data_root = data_root
+    # self.zarr_root = zarr_root
+    self.label_csv_path = label_csv_path
+    self.cache_csv_path = cache_csv_path
+    self.save_path = save_path
+    # self.zarr_file = zarr.open(zarr_root, 'a')
+    self.extensions = extensions
+    self.clip_length_in_frames = clip_length_in_frames
+    self.frame_rate = frame_rate
+    self.transforms = transforms
+    self.cache_exists = cache_exists
+
+    if self.cache_exists:
+      self.cache_df = pd.read_csv(self.cache_csv_path)
+      self.class_to_idx = {label: i for i, label in enumerate(self.cache_df['label'].unique())}
+
+    elif self.cache_exists == False:
+      self.label_df = pd.read_csv(self.label_csv_path)
+      columns = ['path', 'label']
+      self.cache_df = pd.DataFrame(columns=columns)
+      # self.create_frame_cache()
+
+
+  def __getitem__(self, index):
+    frame_path = self.cache_df.iloc[index]['path']
+    label = self.cache_df.iloc[index]['label']
+    file_names = sorted(os.listdir(frame_path))
+    start_frame = random.randint(0, max(0, len(file_names)-self.clip_length_in_frames))
+    start_frame_shape = plt.imread(os.path.join(frame_path, file_names[0])).shape
+    clip = np.empty((0, start_frame_shape[0], start_frame_shape[1], start_frame_shape[2]))
+    for frame_idx in range(start_frame, start_frame+self.clip_length_in_frames):
+      try:
+        frame = np.expand_dims(plt.imread(os.path.join(frame_path, file_names[frame_idx])), axis=0)
+      except:
+        print('Could not fetch frame:{}, for file:{}'.format(frame_idx, frame_path))
+      clip = np.concatenate((clip, frame), axis=0)
+    if self.transforms != None:
+      # clip = self.transforms(torch.as_tensor(clip, dtype=torch.uint8, device=torch.device('cuda')))
+      clip = self.transforms(torch.as_tensor(clip, dtype=torch.uint8))
+    # print(type(label), label, clip.shape)
+    return clip, self.class_to_idx[label]
+
+  def  __len__(self):
+    return len(self.cache_df)
+
+  def decode_video(self, file, frame_path):
+    command = "ffmpeg  -loglevel panic -i {} -q:v 1 -vf fps={} {}/%06d.jpg".format(os.path.join(self.data_root, file), self.frame_rate, frame_path)
+    try:
+      os.system(command)
+    except:
+      return False
+    return True
+
+  def vid2frame(self, info):
+      idx, file = info
+
+      def is_video(file):
+        if self.extensions == None:
+          self.extensions = ['.avi', '.mp4']
+        for ext in self.extensions:
+          if file.endswith(ext):
+            return True
+        return False
+
+      #create jpg frames from video
+      if is_video(file):
+        frame_path = os.path.join(self.save_path,file[:-4])
+        os.makedirs(frame_path)
+        files_written = self.decode_video(file, frame_path)
+        if not files_written:
+          raise RuntimeError('Failed to convert file {}'.format(file))
+          return
+        label = str(self.label_df[self.label_df['youtube_id'] == file[:-4]]['label'])
+        self.cache_df.loc[len(self.cache_df)] = [frame_path, label]
+      if idx % 1000 == 0:
+        print('{} done'.format(idx))
+  # def create_frame_cache(self):
+    # self.zarr_file.create_froup('videos')
+    # self.zarr_file.create_froup('labels')
+    # num_clips = 0
+
+
+
+    # Parallel(n_jobs=10)(delayed(self.vid2frame)((idx, file)) for idx, file in enumerate(os.listdir(self.data_root)))
+    # p = Pool(16)
+    # p.map(self.vid2frame, enumerate(os.listdir(self.data_root)))
+    # for file in tqdm(os.listdir(self.data_root)):
+    #save cache to disk
+    # self.cache_df.to_csv(self.cache_csv_path)
 
 
 class UCF101(data.Dataset):
@@ -410,7 +531,7 @@ class UCF101(data.Dataset):
     self.samples = self.make_dataset(root, class_to_idx, extensions, is_valid_file=None)
     video_list = [x[0] for x in self.samples]
 
-    self.video_clips = VideoClips(sorted(glob(root+'/**/*')), clip_length_in_frames, frames_between_clips,frame_rate=frame_rate,num_workers=8)
+    self.video_clips = VideoClips(sorted(glob(root+'/**/*')), clip_length_in_frames, frames_between_clips,frame_rate=frame_rate,num_workers=16)
     self.transforms = transforms
 
   def make_dataset(self, dir, class_to_idx, extensions=None, is_valid_file=None):
@@ -436,6 +557,7 @@ class UCF101(data.Dataset):
 
   def __getitem__(self, index):
     # index = 0
+    # print(index)
     clip, audio, info, video_idx = self.video_clips.get_clip(index)
     # print('NUM_CLIPS!!!: ', self.video_clips.num_clips(), 'NUM_VIDEOS: ', self.video_clips.num_videos())
     # print('VideoClips files: ', ' | '.join(self.video_clips.video_paths))
@@ -443,7 +565,7 @@ class UCF101(data.Dataset):
     if self.transforms != None:
       clip = self.transforms(clip)
     label = self.samples[video_idx][1]
-
+    # print(type(label), clip.shape)
     return clip, label
 
   def __len__(self):

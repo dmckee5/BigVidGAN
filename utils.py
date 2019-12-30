@@ -64,7 +64,9 @@ def prepare_parser():
   parser.add_argument(
     '--annotation_file', type = str, default='/home/nfs/data/trainlist01.txt',
     help='Where is the data seperation file? (default: %(default)s)')
-
+  parser.add_argument(
+    '--cache_csv_path', type = str, default='/home/ubuntu/kinetics-400/kinetics/file_cache.csv',
+    help='Where is the frames cache file? (default: %(default)s)')
 
   ### Model stuff ###
   parser.add_argument(
@@ -440,28 +442,32 @@ dset_dict = {'I32': dset.ImageFolder, 'I64': dset.ImageFolder,
              'I128': dset.ImageFolder, 'I256': dset.ImageFolder,
              'I32_hdf5': dset.ILSVRC_HDF5, 'I64_hdf5': dset.ILSVRC_HDF5,
              'I128_hdf5': dset.ILSVRC_HDF5, 'I256_hdf5': dset.ILSVRC_HDF5,
-             'C10': dset.CIFAR10, 'C100': dset.CIFAR100, 'UCF101': dset.UCF101, 'UCF101_32': dset.UCF101}
+             'C10': dset.CIFAR10, 'C100': dset.CIFAR100, 'UCF101': dset.UCF101, 'UCF101_32': dset.UCF101,
+             'Kinetics400': dset.UCF101}
 imsize_dict = {'I32': 32, 'I32_hdf5': 32,
                'I64': 64, 'I64_hdf5': 64,
                'I128': 128, 'I128_hdf5': 128,
                'I256': 256, 'I256_hdf5': 256,
-               'C10': 32, 'C100': 32, 'UCF101': 64, 'UCF101_32':32}  #hardcoded needs to be changed later: Jugat
+               'C10': 32, 'C100': 32, 'UCF101': 64, 'UCF101_32':32,
+               'Kinetics400':64}  #hardcoded needs to be changed later: Jugat
 root_dict = {'I32': 'ImageNet', 'I32_hdf5': 'ILSVRC32.hdf5',
              'I64': 'ImageNet', 'I64_hdf5': 'ILSVRC64.hdf5',
              'I128': 'ImageNet', 'I128_hdf5': 'ILSVRC128.hdf5',
              'I256': 'ImageNet', 'I256_hdf5': 'ILSVRC256.hdf5',
-             'C10': 'cifar', 'C100': 'cifar', 'UCF101': 'UCF101.hdf5','UCF101_32': 'UCF101.hdf5'}
+             'C10': 'cifar', 'C100': 'cifar', 'UCF101': 'UCF101.hdf5','UCF101_32': 'UCF101.hdf5','Kinetics400': 'Kinetics400.hdf5'}
 nclass_dict = {'I32': 1000, 'I32_hdf5': 1000,
                'I64': 1000, 'I64_hdf5': 1000,
                'I128': 1000, 'I128_hdf5': 1000,
                'I256': 1000, 'I256_hdf5': 1000,
-               'C10': 10, 'C100': 100, 'UCF101': 101, 'UCF101_32':101}
+               'C10': 10, 'C100': 100, 'UCF101': 101, 'UCF101_32':101,
+               'Kinetics400':400}
 # Number of classes to put per sample sheet
 classes_per_sheet_dict = {'I32': 50, 'I32_hdf5': 50,
                           'I64': 50, 'I64_hdf5': 50,
                           'I128': 20, 'I128_hdf5': 20,
                           'I256': 20, 'I256_hdf5': 20,
-                          'C10': 10, 'C100': 100, 'UCF101': 101, 'UCF101_32':101}
+                          'C10': 10, 'C100': 100, 'UCF101': 101, 'UCF101_32':101,
+                          'Kinetics400':400}
 activation_dict = {'inplace_relu': nn.ReLU(inplace=True),
                    'relu': nn.ReLU(inplace=False),
                    'ir': nn.ReLU(inplace=True),}
@@ -683,19 +689,98 @@ def get_video_data_loaders(dataset, data_root=None, annotation_path=None, augmen
   # which_dataset = dset_dict[dataset]
   norm_mean = [0.5,0.5,0.5]
   norm_std = [0.5,0.5,0.5]
-  # print(frame_size)
-  # # For image folder datasets, name of the file where we store the precomputed
-  # # image locations to avoid having to walk the dirs every time we load.
-  # # dataset_kwargs = {'index_filename': '%s_imgs.npz' % dataset}
-
   train_transform = transforms.Compose([
-                   dset.ToTensorVideo(),
-                   dset.VideoResizedCenterCrop(frame_size),
-                   dset.VideoNormalize(norm_mean, norm_std)])
+                     dset.ToTensorVideo(),
+                     dset.VideoResizedCenterCrop(frame_size),
+                     dset.VideoNormalize(norm_mean, norm_std)])
   loader_kwargs = {'num_workers': num_workers, 'pin_memory': pin_memory, 'drop_last': drop_last}
-  video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=frames_between_clips, transforms = train_transform)
-  print('Shuffle the dataset?',shuffle)
+
+  if 'UCF' in dataset:
+
+    video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=frames_between_clips, transforms = train_transform)
+    print('Shuffle the dataset?',shuffle)
+  elif 'Kinetics400' in dataset:
+    # t = []
+    # t.extend([transforms_mutli.transforms.RandomCrop(256),
+    #       transforms_mutli.transforms.RandomHorizontalFlip(),
+    #       transforms_mutli.transforms.ToTensor(),
+    #       normalize])
+    data_root = '/home/ubuntu/kinetics-400/kinetics/Kinetics_trimmed_videos_train_merge'
+    save_path = '/home/ubuntu/kinetics-400/kinetics/frames'
+    label_csv_path = '/home/ubuntu/kinetics-400/kinetics/csv/kinetics-400_train.csv'
+    cache_csv_path = '/home/ubuntu/kinetics-400/kinetics/file_cache.csv'
+    video_dataset = dset.vid2frame_dataset(data_root=data_root, save_path=save_path, label_csv_path=label_csv_path,
+                        cache_csv_path=cache_csv_path, extensions=None, clip_length_in_frames=time_steps,
+                        frame_rate=12, transforms=train_transform, cache_exists=True)
   return [DataLoader(video_dataset, batch_size=batch_size, shuffle=shuffle, **loader_kwargs)]
+
+def get_inception_video_data_loaders(dataset, data_root=None, annotation_path=None, augment=False, batch_size=64,
+                     time_steps=12, frames_between_clips=10e6,
+                     num_workers=8, shuffle=True, load_in_mem=False, hdf5=True,
+                     pin_memory=True, drop_last=True, start_itr=0,
+                     num_epochs=500, use_multiepoch_sampler=False, frame_size = 128,
+                     **kwargs):
+
+  # # Append /FILENAME.hdf5 to root if using hdf5
+  # data_root += '/%s' % root_dict[dataset]
+  # print('Using dataset root location %s' % data_root)
+
+  # which_dataset = dset_dict[dataset]
+  norm_mean = [0.43216, 0.394666, 0.37645]
+  norm_std = [0.22803, 0.22145, 0.216989]
+  train_transform = transforms.Compose([
+                     dset.ToTensorVideo(),
+                     dset.VideoResizedCenterCrop(frame_size),
+                     dset.VideoNormalize(norm_mean, norm_std)])
+  loader_kwargs = {'num_workers': num_workers, 'pin_memory': pin_memory, 'drop_last': drop_last}
+
+  if 'UCF' in dataset:
+
+    video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=frames_between_clips, transforms = train_transform)
+    print('Shuffle the dataset?',shuffle)
+  elif 'Kinetics400' in dataset:
+    # t = []
+    # t.extend([transforms_mutli.transforms.RandomCrop(256),
+    #       transforms_mutli.transforms.RandomHorizontalFlip(),
+    #       transforms_mutli.transforms.ToTensor(),
+    #       normalize])
+    data_root = '/home/ubuntu/kinetics-400/kinetics/Kinetics_trimmed_videos_train_merge'
+    save_path = '/home/ubuntu/kinetics-400/kinetics/frames'
+    label_csv_path = '/home/ubuntu/kinetics-400/kinetics/csv/kinetics-400_train.csv'
+    cache_csv_path = '/home/ubuntu/kinetics-400/kinetics/file_cache.csv'
+    video_dataset = dset.vid2frame_dataset(data_root=data_root, save_path=save_path, label_csv_path=label_csv_path,
+                        cache_csv_path=cache_csv_path, extensions=None, clip_length_in_frames=time_steps,
+                        frame_rate=12, transforms=train_transform, cache_exists=True)
+  return [DataLoader(video_dataset, batch_size=batch_size, shuffle=shuffle, **loader_kwargs)]
+
+#xiaodan: THis is the old version. Not using it any more
+# def get_inception_video_data_loaders(dataset, data_root=None, annotation_path=None, augment=False, batch_size=64,
+#                      time_steps=12, frames_between_clips=10e6,
+#                      num_workers=8, shuffle=True, load_in_mem=False, hdf5=True,
+#                      pin_memory=True, drop_last=True, start_itr=0,
+#                      num_epochs=500, use_multiepoch_sampler=False, frame_size = 128,
+#                      **kwargs):
+#
+#   # # Append /FILENAME.hdf5 to root if using hdf5
+#   # data_root += '/%s' % root_dict[dataset]
+#   # print('Using dataset root location %s' % data_root)
+#
+#   # which_dataset = dset_dict[dataset]
+#   norm_mean = [0.43216, 0.394666, 0.37645]
+#   norm_std = [0.22803, 0.22145, 0.216989]
+#   # print(frame_size)
+#   # # For image folder datasets, name of the file where we store the precomputed
+#   # # image locations to avoid having to walk the dirs every time we load.
+#   # # dataset_kwargs = {'index_filename': '%s_imgs.npz' % dataset}
+#
+#   train_transform = transforms.Compose([
+#                    dset.ToTensorVideo(),
+#                    dset.VideoResizedCenterCrop(frame_size),
+#                    dset.VideoNormalize(norm_mean, norm_std)])
+#   loader_kwargs = {'num_workers': num_workers, 'pin_memory': pin_memory, 'drop_last': drop_last}
+#   video_dataset = dset.UCF101(data_root, clip_length_in_frames=time_steps, frames_between_clips=frames_between_clips, transforms = train_transform)
+#   print('Shuffle the dataset?',shuffle)
+#   return [DataLoader(video_dataset, batch_size=batch_size, shuffle=shuffle, **loader_kwargs)]
 
 
 # Utility file to seed rngs

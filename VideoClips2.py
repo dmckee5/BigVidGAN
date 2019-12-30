@@ -223,7 +223,13 @@ class VideoClips(object):
                 return len(self.x)
 
             def __getitem__(self, idx):
-                return read_video_timestamps(self.x[idx])
+                # print(self.x[idx])
+                try:
+                    testoutput = read_video_timestamps(self.x[idx])
+                    return testoutput
+                except:
+                    # import pdb; pdb.set_trace()
+                    print('Got a problem at:', self.x[idx])
 
         import torch.utils.data
         dl = torch.utils.data.DataLoader(
@@ -231,7 +237,7 @@ class VideoClips(object):
             batch_size=16,
             num_workers=self.num_workers,
             collate_fn=lambda x: x)
-
+        # print(len(dl))
         with tqdm(total=len(dl)) as pbar:
             for batch in dl:
                 pbar.update(1)

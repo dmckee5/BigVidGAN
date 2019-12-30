@@ -1,16 +1,16 @@
 ''' Inception utilities
     This file contains methods for calculating IS and FID, using either
-    the original numpy code or an accelerated fully-pytorch version that 
+    the original numpy code or an accelerated fully-pytorch version that
     uses a fast newton-schulz approximation for the matrix sqrt. There are also
     methods for acquiring a desired number of samples from the Generator,
     and parallelizing the inbuilt PyTorch inception network.
-    
-    NOTE that Inception Scores and FIDs calculated using these methods will 
+
+    NOTE that Inception Scores and FIDs calculated using these methods will
     *not* be directly comparable to values calculated using the original TF
     IS/FID code. You *must* use the TF model if you wish to report and compare
     numbers. This code tends to produce IS values that are 5-10% lower than
-    those obtained through TF. 
-'''    
+    those obtained through TF.
+'''
 import numpy as np
 from scipy import linalg # For numpy FID
 import time
@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Parameter as P
 from torchvision.models.inception import inception_v3
-
+from torchvision.models.video import r2plus1d_18
 
 # Module that wraps the inception network to enable use with dataparallel and
 # returning pool features and logits.
@@ -83,6 +83,42 @@ class WrapInception(nn.Module):
     # 1000 (num_classes)
     return pool, logits
 
+#xiaodan: added by xiaodan
+class WrapR2plus1d_18(nn.Module):
+  def __init__(self, net):
+    super(WrapR2plus1d_18,self).__init__()
+    self.net = net
+    self.removed = list(self.net.children())[-1]
+    self.remained = list(self.net.children())[:-1]
+    self.poolModel= torch.nn.Sequential(*self.remained)
+    #xiaodan: mean and std stats from https://pytorch.org/docs/stable/torchvision/models.html#video-classification
+    self.mean = P(torch.tensor([0.43216, 0.394666, 0.37645]).view(1, -1, 1, 1),
+                  requires_grad=False)
+    self.std = P(torch.tensor([0.22803, 0.22145, 0.216989]).view(1, -1, 1, 1),
+                 requires_grad=False)
+  def forward(self, x):
+    # x [B,T,C,H,W]
+    # Normalize x
+    x = (x + 1.) / 2.0
+    x = (x - self.mean) / self.std
+    # print('x',x.shape)
+    # Upsample if necessary
+    if x.shape[3] != 112 or x.shape[4] != 112:
+      x_list=[]
+      for x_single in x:
+        # print('x_single',x_single.shape)
+        #xiaodan: size (112,112) for R (2+1)D, not sure if 'area' will be better than bilinear
+        x_single_down = F.interpolate(x_single, size=(112, 112), mode='bilinear', align_corners=True)
+        # print('x_single_down',x_single_down.shape)
+        x_list.append(x_single_down.unsqueeze(0))
+      x = torch.cat(x_list) #[B,T,C,112,112]
+    else:
+      print('Already 112')
+    x = x.permute(0,2,1,3,4).contiguous()#[B,C,T,112,112]
+
+    pool = self.poolModel(x).squeeze() # [B,512]
+    logits = self.removed(pool)# [B,400]
+    return pool, logits
 
 # A pytorch implementation of cov, from Modar M. Alfadly
 # https://discuss.pytorch.org/t/covariance-and-gradient-support/16217/2
@@ -120,7 +156,7 @@ def torch_cov(m, rowvar=False):
 
 
 # Pytorch implementation of matrix sqrt, from Tsung-Yu Lin, and Subhransu Maji
-# https://github.com/msubhransu/matrix-sqrt 
+# https://github.com/msubhransu/matrix-sqrt
 def sqrt_newton_schulz(A, numIters, dtype=None):
   with torch.no_grad():
     if dtype is None:
@@ -152,10 +188,10 @@ def numpy_calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
   -- mu1   : Numpy array containing the activations of a layer of the
              inception net (like returned by the function 'get_predictions')
              for generated samples.
-  -- mu2   : The sample mean over activations, precalculated on an 
+  -- mu2   : The sample mean over activations, precalculated on an
              representive data set.
   -- sigma1: The covariance matrix over activations for generated samples.
-  -- sigma2: The covariance matrix over activations, precalculated on an 
+  -- sigma2: The covariance matrix over activations, precalculated on an
              representive data set.
   Returns:
   --   : The Frechet Distance.
@@ -189,9 +225,9 @@ def numpy_calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
     if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
       m = np.max(np.abs(covmean.imag))
       raise ValueError('Imaginary component {}'.format(m))
-    covmean = covmean.real  
+    covmean = covmean.real
 
-  tr_covmean = np.trace(covmean) 
+  tr_covmean = np.trace(covmean)
 
   out = diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
   return out
@@ -208,10 +244,10 @@ def torch_calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
   -- mu1   : Numpy array containing the activations of a layer of the
              inception net (like returned by the function 'get_predictions')
              for generated samples.
-  -- mu2   : The sample mean over activations, precalculated on an 
+  -- mu2   : The sample mean over activations, precalculated on an
              representive data set.
   -- sigma1: The covariance matrix over activations for generated samples.
-  -- sigma2: The covariance matrix over activations, precalculated on an 
+  -- sigma2: The covariance matrix over activations, precalculated on an
              representive data set.
   Returns:
   --   : The Frechet Distance.
@@ -225,7 +261,7 @@ def torch_calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
 
   diff = mu1 - mu2
   # Run 50 itrs of newton-schulz to get the matrix sqrt of sigma1 dot sigma2
-  covmean = sqrt_newton_schulz(sigma1.mm(sigma2).unsqueeze(0), 50).squeeze()  
+  covmean = sqrt_newton_schulz(sigma1.mm(sigma2).unsqueeze(0), 50).squeeze()
   out = (diff.dot(diff) +  torch.trace(sigma1) + torch.trace(sigma2)
          - 2 * torch.trace(covmean))
   return out
@@ -243,14 +279,14 @@ def calculate_inception_score(pred, num_splits=10):
 
 
 # Loop and run the sampler and the net until it accumulates num_inception_images
-# activations. Return the pool, the logits, and the labels (if one wants 
+# activations. Return the pool, the logits, and the labels (if one wants
 # Inception Accuracy the labels of the generated class will be needed)
 def accumulate_inception_activations(sample, net, num_inception_images=50000):
   pool, logits, labels = [], [], []
   while (torch.cat(logits, 0).shape[0] if len(logits) else 0) < num_inception_images:
     with torch.no_grad():
-      images, labels_val = sample()
-      pool_val, logits_val = net(images.float())
+      videos, labels_val = sample()
+      pool_val, logits_val = net(videos.float())
       pool += [pool_val]
       logits += [F.softmax(logits_val, 1)]
       labels += [labels_val]
@@ -267,6 +303,16 @@ def load_inception_net(parallel=False):
   return inception_model
 
 
+#xiaodan: added by xiaodan to use R(2+1)D model
+# Load and wrap the R(2+1)D model
+def load_r2plus1d_18_net(parallel=False):
+  r2plus1d_18_model = r2plus1d_18(pretrained=True)
+  r2plus1d_18_model = WrapR2plus1d_18(r2plus1d_18_model.eval()).cuda()
+  if parallel:
+    print('Parallelizing Inception module...')
+    r2plus1d_18_model = nn.DataParallel(r2plus1d_18_model)
+  return r2plus1d_18_model
+
 # This produces a function which takes in an iterator which returns a set number of samples
 # and iterates until it accumulates config['num_inception_images'] images.
 # The iterator can return samples with a different batch size than used in
@@ -279,13 +325,13 @@ def prepare_inception_metrics(dataset, parallel, no_fid=False):
   data_mu = np.load(dataset+'_inception_moments.npz')['mu']
   data_sigma = np.load(dataset+'_inception_moments.npz')['sigma']
   # Load network
-  net = load_inception_net(parallel)
-  def get_inception_metrics(sample, num_inception_images, num_splits=10, 
+  net = load_r2plus1d_18_net(parallel)
+  def get_inception_metrics(sample, num_inception_images, num_splits=10,
                             prints=True, use_torch=True):
     if prints:
       print('Gathering activations...')
     pool, logits, labels = accumulate_inception_activations(sample, net, num_inception_images)
-    if prints:  
+    if prints:
       print('Calculating Inception Score...')
     IS_mean, IS_std = calculate_inception_score(logits.cpu().numpy(), num_splits)
     if no_fid:
@@ -294,7 +340,7 @@ def prepare_inception_metrics(dataset, parallel, no_fid=False):
       if prints:
         print('Calculating means and covariances...')
       if use_torch:
-        mu, sigma = torch.mean(pool, 0), torch_cov(pool, rowvar=False)
+        mu, sigma = torch.mean(pool, 0), torch_cov(pool, rowvar=False) #[512], [512,512]
       else:
         mu, sigma = np.mean(pool.cpu().numpy(), axis=0), np.cov(pool.cpu().numpy(), rowvar=False)
       if prints:

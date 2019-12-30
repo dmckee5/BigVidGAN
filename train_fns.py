@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import os
-
+import pandas as pd
 import utils
 import losses
 from torchvision.datasets.utils import list_dir
@@ -20,8 +20,13 @@ def dummy_training_function():
 
 
 def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
-  classes = list(sorted(list_dir(config['data_root'])))
-  idx_to_classes = {i: classes[i] for i in range(len(classes))}
+  if 'UCF' in config['dataset']:
+    classes = list(sorted(list_dir(config['data_root'])))
+    idx_to_classes = {i: classes[i] for i in range(len(classes))}
+  elif 'Kinetics' in config['dataset']:
+    cache_df = pd.read_csv(config['cache_csv_path'])
+    idx_to_classes = {i: label for i, label in enumerate(cache_df['label'].unique())}
+
   def train(x, y, tensor_writer = None, iteration=None):
     G.optim.zero_grad()
     D.optim.zero_grad()
@@ -30,10 +35,16 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
 
     if tensor_writer != None and iteration % 100 == 0:
       tensor_writer.add_video('Loaded Data', (x + 1)/2, iteration)
+      mean_pixel_val = torch.mean((x+1)/2, dim=[0, 1, 3, 4])
+      tensor_writer.add_scalar('Pixel vals/Mean Red Pixel values, real data', float(mean_pixel_val[0].item()), iteration)
+      tensor_writer.add_scalar('Pixel vals/Mean Green Pixel values, real data', float(mean_pixel_val[1].item()), iteration)
+      tensor_writer.add_scalar('Pixel vals/Mean Blue Pixel values, real data', float(mean_pixel_val[2].item()), iteration)
+
       y_text=[]
       for yi in y:
         y_text.append(idx_to_classes[yi.item()])
       tensor_writer.add_text('Loaded Labels',' | '.join(y_text),iteration)
+
     # print('Range of loaded data:',x.min(),'--',x.max())
     # How many chunks to split x and y into?
     x = torch.split(x, config['batch_size'])
@@ -158,6 +169,10 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
               'D_loss_fake': float(D_loss_fake.item())}
     if tensor_writer != None and iteration % 100 == 0:
       tensor_writer.add_video('Video Results', (G_z + 1)/2, iteration)
+      mean_pixel_val = torch.mean((G_z + 1)/2, dim=[0, 1, 3, 4])
+      tensor_writer.add_scalar('Pixel vals/Mean Red Pixel values, fake data', float(mean_pixel_val[0].item()), iteration)
+      tensor_writer.add_scalar('Pixel vals/Mean Green Pixel values, fake data', float(mean_pixel_val[1].item()), iteration)
+      tensor_writer.add_scalar('Pixel vals/Mean Blue Pixel values, fake data', float(mean_pixel_val[2].item()), iteration)
       y_Gz_text=[]
       for yi in y_:
         y_Gz_text.append(idx_to_classes[yi.item()])
@@ -273,3 +288,4 @@ def test(G, D, Dv, G_ema, z_, y_, state_dict, config, sample, get_inception_metr
   # Log results to file
   test_log.log(itr=int(state_dict['itr']), IS_mean=float(IS_mean),
                IS_std=float(IS_std), FID=float(FID))
+  return float(IS_mean),float(IS_std),float(FID)

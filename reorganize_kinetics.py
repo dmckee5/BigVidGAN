@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 
-root = '/home/ubuntu/nfs/data/kinetics-400/train'
+root = '/home/ubuntu/kinetics-400/kinetics'
 video_path = os.path.join(root, 'Kinetics_trimmed_videos_train_merge')
 
 df = pd.read_csv(os.path.join(root, 'csv', 'kinetics-400_train.csv'))
