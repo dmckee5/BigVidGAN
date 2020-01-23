@@ -36,6 +36,10 @@ def loss_hinge_gen(dis_fake):
   loss = -torch.mean(dis_fake)
   return loss
 
+def avg_pixel_loss(diff_value, weight=0.1):
+    loss = weight * diff_value
+    return loss
+
 # Default to hinge loss
 generator_loss = loss_hinge_gen
 discriminator_loss = loss_hinge_dis #xiaodan: changed by xiaodan to accomodate k frames for each video

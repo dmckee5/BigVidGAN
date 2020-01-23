@@ -162,6 +162,15 @@ def prepare_parser():
   parser.add_argument(
     '--no_Dv', action='store_true', default=False,
     help='Turn off video discriminator in G?(default: %(default)s)')
+  parser.add_argument(
+    '--no_avg_pixel_loss', action='store_true', default=False,
+    help='Turn off average pixel loss in G_loss?(default: %(default)s)')
+  parser.add_argument(
+    '--avg_pixel_loss_weight', type=float, default=0.1,
+    help='Weight coefficient of avg pixel loss: %(default)s)')
+  parser.add_argument(
+    '--pixel_loss_kicksin', type=int, default=50000,
+    help='When will avg pixel loss kicks in: %(default)s)')
 
   ### Model init stuff ###
   parser.add_argument(

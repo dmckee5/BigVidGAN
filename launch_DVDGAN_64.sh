@@ -5,7 +5,8 @@
 #--ema --use_ema --ema_start 20000 \
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 /usr/bin/python3 train.py \
---resume \
+--resume --experiment_name 'template' \
+--avg_pixel_loss_weight 0.5 --pixel_loss_kicksin 50000 \
 --dataset Kinetics400 --annotation_file '/home/nfs/data/trainlist01.txt' --parallel --shuffle \
 --num_workers 32 --batch_size 108 --load_in_mem  \
 --num_G_accumulations 1 --num_D_accumulations 1 --num_epochs 5000 \

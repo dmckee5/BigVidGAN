@@ -44,7 +44,9 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       for yi in y:
         y_text.append(idx_to_classes[yi.item()])
       tensor_writer.add_text('Loaded Labels',' | '.join(y_text),iteration)
-
+    #Added by Xiaodan: prepare for avg pixel loss
+    if config['no_avg_pixel_loss'] == False:
+      mean_pixel_val_real = torch.mean((x + 1)/2)
     # print('Range of loaded data:',x.min(),'--',x.max())
     # How many chunks to split x and y into?
     x = torch.split(x, config['batch_size'])
@@ -137,6 +139,16 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       G_loss = losses.generator_loss(D_fake) / float(config['num_G_accumulations'])
       if config['no_Dv'] == False:
         G_loss += losses.generator_loss(Dv_fake) / float(config['num_G_accumulations'])
+      #Added by Xiaodan to take avg. pixel value into account as an additional losses
+      # print(type(G_loss))
+      if config['no_avg_pixel_loss'] == False:
+        mean_pixel_val_fake = torch.mean((G_z + 1)/2)
+        mean_pixel_val_diff = abs(float(mean_pixel_val_fake.item())-float(mean_pixel_val_real.item()))
+        mean_pixel_loss = losses.avg_pixel_loss(mean_pixel_val_diff , config['avg_pixel_loss_weight']) / float(config['num_G_accumulations'])
+        if iteration >= config['pixel_loss_kicksin']:
+          G_loss += mean_pixel_loss
+        else:
+          mean_pixel_loss = 0
       G_loss.backward()
 
     # Optionally apply modified ortho reg in G
@@ -179,6 +191,8 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       tensor_writer.add_text('Generated Labels',' | '.join(y_Gz_text),iteration)
 
     # Return G's loss and the components of D's loss.
+    if config['no_avg_pixel_loss'] == False:
+      tensor_writer.add_scalar('Loss/avg_pixel_loss', mean_pixel_loss, iteration)
     tensor_writer.add_scalar('Loss/G_loss', out['G_loss'], iteration)
     tensor_writer.add_scalar('Loss/D_loss_real', out['D_loss_real'], iteration)
     tensor_writer.add_scalar('Loss/D_loss_fake', out['D_loss_fake'], iteration)
