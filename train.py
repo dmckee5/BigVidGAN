@@ -108,6 +108,14 @@ def run(config):
   state_dict = {'itr': 0, 'epoch': 0, 'save_num': 0, 'save_best_num': 0,
                 'best_IS': 0, 'best_FID': 999999, 'config': config}
 
+
+  # If loading from a pre-trained BigGAN model, load weights
+  if config['biggan_init']:
+    print('Loading weights from pre-trained BigGAN...')
+    utils.load_biggan_weights(G, D, state_dict,
+                       config['biggan_weights_root'],
+                       G_ema if config['ema'] else None, load_optim=False)
+
   # If loading from a pre-trained model, load weights
   if config['resume']:
     print('Loading weights...')
@@ -150,9 +158,8 @@ def run(config):
                                         'start_itr': state_dict['itr']})
   # print(loaders)
   # print(loaders[0])
-
+  print('D loss weight:',config['D_loss_weight'])
   # Prepare inception metrics: FID and IS
-  #xiaodan: disabled by xiaodan
   get_inception_metrics = inception_utils.prepare_inception_metrics(config['dataset'], config['parallel'], config['no_fid'])
 
   # Prepare noise and randomly sampled label arrays

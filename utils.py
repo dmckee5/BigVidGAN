@@ -150,6 +150,7 @@ def prepare_parser():
     '--norm_style', type=str, default='bn',
     help='Normalizer style for G, one of bn [batchnorm], in [instancenorm], '
          'ln [layernorm], gn [groupnorm] (default: %(default)s)')
+  #Xiaodan: Everything below were added by Xiaodan
   parser.add_argument(
     '--no_convgru', action='store_true', default=False,
     help='Turn off convgru in G?(default: %(default)s)')
@@ -166,11 +167,20 @@ def prepare_parser():
     '--no_avg_pixel_loss', action='store_true', default=False,
     help='Turn off average pixel loss in G_loss?(default: %(default)s)')
   parser.add_argument(
-    '--avg_pixel_loss_weight', type=float, default=0.1,
+    '--avg_pixel_loss_weight', type=float, default=0.0,
     help='Weight coefficient of avg pixel loss: %(default)s)')
+  #Xiaodan: Added by Xiaodan
   parser.add_argument(
     '--pixel_loss_kicksin', type=int, default=50000,
     help='When will avg pixel loss kicks in: %(default)s)')
+  #xiaodan: Added by Xiaodan
+  parser.add_argument(
+    '--D_hinge_loss_sum', type=str, default='before',
+    help='Whether sum the scores of k frames obtained from D before or after (default: %(default)s)')
+  parser.add_argument(
+    '--D_loss_weight', type=float, default=1.0,
+    help='What is the weight of D loss to Dv loss (Default1:1): %(default)s)')
+
 
   ### Model init stuff ###
   parser.add_argument(
@@ -186,6 +196,16 @@ def prepare_parser():
   parser.add_argument(
     '--skip_init', action='store_true', default=False,
     help='Skip initialization, ideal for testing when ortho init was used '
+          '(default: %(default)s)')
+
+  ### Transfer Learning Stuff ###
+  parser.add_argument(
+    '--biggan_init', action='store_true', default=False,
+    help='Initialize G and image discriminator with weights from BigGAN pretrained on ImageNet'
+          '(default: %(default)s)')
+  parser.add_argument(
+    '--biggan_weights_root', type=str, default='',
+    help='Root for weights from BigGAN pretrained on ImageNet'
           '(default: %(default)s)')
 
   ### Optimizer stuff ###
@@ -920,6 +940,41 @@ def save_weights(G, D, Dv, state_dict, weights_root, experiment_name,
   if G_ema is not None:
     torch.save(G_ema.state_dict(),
                 '%s/%s.pth' % (root, join_strings('_', ['G_ema', name_suffix])))
+
+
+def load_biggan_weights(G, D, state_dict, weights_root,
+                 name_suffix=None, G_ema=None, strict=True, load_optim=False):
+  root = weights_root
+  if name_suffix:
+    print('Loading %s weights from %s...' % (name_suffix, root))
+  else:
+    print('Loading weights from %s...' % root)
+  if G is not None:
+    G_model_dict = G.state_dict()
+    pretrained_G_dict = torch.load('%s/%s.pth' % (root,'G')) #load BigGAN's state_dict
+    pretrained_G_dict = {k:v for k, v in pretrained_G_dict.items() if k in G_model_dict and k not in ['linear.weight', 'shared.weight', 'linear.u0', 'linear.bias']} #filter out unnecessary keys from BigGAN
+    G_model_dict.update(pretrained_G_dict)                                               #update superset dict with pretrained weights
+    G.load_state_dict(G_model_dict, strict=strict)                                       #load weights in model
+
+    if load_optim:
+      G.optim.load_state_dict(
+        torch.load('%s/%s.pth' % (root, join_strings('_', ['G_optim', name_suffix]))))
+  if D is not None:
+    D_model_dict = D.state_dict()
+    pretrained_D_dict = torch.load('%s/%s.pth' % (root,'D')) #load BigGAN's state_dict
+    pretrained_D_dict = {k:v for k,v in pretrained_D_dict.items() if k in D_model_dict}         #filter out unnecessary keys from BigGAN
+    D_model_dict.update(pretrained_D_dict)                                                      #update superset dict with pretrained weights
+    D.load_state_dict(D_model_dict, strict=strict)                                              #load weights in model
+
+    if load_optim:
+      D.optim.load_state_dict(
+        torch.load('%s/%s.pth' % (root, join_strings('_', ['D_optim', name_suffix]))))
+
+
+  # Load state dict
+  # for item in state_dict:
+  #   state_dict[item] = torch.load('%s/%s.pth' % (root, join_strings('_', ['state_dict', name_suffix])))[item]
+  # if G_ema is not None:
 
 
 # Load a model's weights, optimizer, and the state_dict

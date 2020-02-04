@@ -28,6 +28,7 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
     idx_to_classes = {i: label for i, label in enumerate(cache_df['label'].unique())}
 
   def train(x, y, tensor_writer = None, iteration=None):
+    print('Summation will be taken',config['D_hinge_loss_sum'],'D hinge loss')
     G.optim.zero_grad()
     D.optim.zero_grad()
     if config['no_Dv'] == False:
@@ -83,16 +84,19 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
                               x[counter], y[counter], train_G=False,
                               split_D=config['split_D'])
         # print('GD.k in train_fns line 49',GD.module.k) #GD.module because GD is now dataparallel class
+        # D_fake & D_real shapes: [Bk,1], [Bk,1]
         # xiaodan: Make scores back to [B,k,1] for easier summation in discriminator_loss
-        D_fake = D_fake.contiguous().view(-1,GD.module.k,*D_fake.shape[1:])
-        D_real = D_real.contiguous().view(-1,GD.module.k,*D_real.shape[1:])
-        D_fake = torch.sum(D_fake,1) #xiaodan: add k scores before doing hinge loss, according to the paper
-        D_real = torch.sum(D_real,1)
+        D_fake = D_fake.contiguous().view(-1,GD.module.k,*D_fake.shape[1:])#[B,k,1]
+        D_real = D_real.contiguous().view(-1,GD.module.k,*D_real.shape[1:])#[B,k,1]
+        if config['D_hinge_loss_sum'] == 'before':
+          D_fake = torch.sum(D_fake,1) #xiaodan: add k scores before doing hinge loss, according to the paper
+          D_real = torch.sum(D_real,1) #[B,1]
         # Compute components of D's loss, average them, and divide by
         # the number of gradient accumulations
-        D_loss_real, D_loss_fake = losses.discriminator_loss(D_fake, D_real)
+        D_loss_real, D_loss_fake = losses.discriminator_loss(D_fake, D_real, config['D_hinge_loss_sum'])
         if config['no_Dv'] == False:
-          Dv_loss_real, Dv_loss_fake = losses.discriminator_loss(Dv_fake, Dv_real)
+          # print('Dv_fake shape',Dv_fake.shape)
+          Dv_loss_real, Dv_loss_fake = losses.discriminator_loss(Dv_fake, Dv_real, 'before')
           D_loss = (D_loss_real + D_loss_fake + Dv_loss_fake + Dv_loss_real) / float(config['num_D_accumulations'])
         else:
           D_loss = (D_loss_real + D_loss_fake) / float(config['num_D_accumulations'])
@@ -134,9 +138,9 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
         D_fake, G_z= GD(z_, y_, train_G=True, split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
 
       D_fake = D_fake.contiguous().view(-1,GD.module.k,*D_fake.shape[1:])
-      D_fake = torch.sum(D_fake,1) #xiaodan: add k scores before doing hinge loss, according to the paper
+      D_fake = torch.mean(D_fake,1) #xiaodan: add k scores before doing hinge loss, according to the paper
 
-      G_loss = losses.generator_loss(D_fake) / float(config['num_G_accumulations'])
+      G_loss = config['D_loss_weight'] * losses.generator_loss(D_fake) / float(config['num_G_accumulations'])
       if config['no_Dv'] == False:
         G_loss += losses.generator_loss(Dv_fake) / float(config['num_G_accumulations'])
       #Added by Xiaodan to take avg. pixel value into account as an additional losses
