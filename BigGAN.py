@@ -31,12 +31,22 @@ def G_arch(ch=64, attention='64', ksize='333333', dilation='111111'):
                'resolution' : [8, 16, 32, 64, 128, 256],
                'attention' : {2**i: (2**i in [int(item) for item in attention.split('_')])
                               for i in range(3,9)}}
-  arch[128] = {'in_channels' :  [ch * item for item in [16, 16, 8, 4, 2]],
-               'out_channels' : [ch * item for item in [16, 8, 4, 2, 1]],
-               'upsample' : [True] * 5,
-               'resolution' : [8, 16, 32, 64, 128],
+  # arch[128] = {'in_channels' :  [ch * item for item in [16, 16, 8, 4, 2]],
+  #              'out_channels' : [ch * item for item in [16, 8, 4, 2, 1]],
+  #              'upsample' : [True] * 5,
+  #              'resolution' : [8, 16, 32, 64, 128],
+  #              'attention' : {2**i: (2**i in [int(item) for item in attention.split('_')])
+  #                             for i in range(3,8)}}
+
+  #Acceleration architecture
+  arch[128] = {'in_channels' :  [16 * item for item in [8, 8, 8, 4]],
+               'out_channels' : [16 * item for item in [8, 8, 4, 1]],
+               'upsample' : [True] * 3 + [False],
+               'resolution' : [8, 16, 32, 32],
                'attention' : {2**i: (2**i in [int(item) for item in attention.split('_')])
-                              for i in range(3,8)}}
+                              for i in range(3,7)}}
+
+
   arch[64]  = {'in_channels' :  [ch * item for item in [8, 8, 8, 4, 2]],
                'out_channels' : [ch * item for item in [8, 8, 4, 2, 1]],
                'upsample' : [True] * 4 + [False],
@@ -307,8 +317,8 @@ class Generator(nn.Module):
     #xiaodan: send h into full Attention
     if self.no_full_attn == False:
       h = self.fullAttn(h)#[B,T,C,4,4]
-
-      h = h.contiguous().view(-1,*h.shape[2:]) #[BT,C,4,4]
+    #Xiaodan: Moved out from the no_full_attn if statement by Xiaodan
+    h = h.contiguous().view(-1,*h.shape[2:]) #[BT,C,4,4]
     # Loop over blocks
     for index, blocklist in enumerate(self.blocks):
       # Second inner loop in case block has multiple layers
@@ -349,6 +359,15 @@ def D_img_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
                'resolution' : [32, 16, 8, 4, 4],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,7)}}
+
+  #Xiaodan: This is the original BigGAN architecture
+  # arch[64]  = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8]],
+  #              'out_channels' : [item * ch for item in [1, 2, 4, 8, 16]],
+  #              'downsample' : [True] * 4 + [False],
+  #              'resolution' : [32, 16, 8, 4, 4],
+  #              'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
+  #                             for i in range(2,7)}}
+
   arch[32]  = {'in_channels' :  [3] + [item * ch for item in [4, 4, 4]],
                'out_channels' : [item * ch for item in [4, 4, 4, 4]],
                'downsample' : [True, True, False, False],
@@ -380,6 +399,7 @@ def D_vid_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,6)},
                '3D resnet' :[True] * 2 + [False] * 2       }
+
   arch[32]  = {'in_channels' :  [3] + [item * ch for item in [4, 4]],
                'out_channels' : [item * ch for item in [4, 4, 4]],
                'downsample' : [True, True, False],
@@ -516,6 +536,65 @@ class ImageDiscriminator(nn.Module):
     # print('h shape image', h.shape)
     # Get projection of final featureset onto class vectors and add to evidence
     out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
+    return out
+def init_weights(model, init_type='xavier', gain=0.02):
+  '''
+  initialize network's weights
+  init_type: normal | xavier | kaiming | orthogonal
+  '''
+
+  def init_func(m):
+    classname = m.__class__.__name__
+    if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
+      if init_type == 'normal':
+        nn.init.normal_(m.weight.data, 0.0, gain)
+      elif init_type == 'xavier':
+#                nn.init.xavier_normal_(m.weight.data, gain=gain)
+        nn.init.xavier_uniform_(m.weight.data)
+      elif init_type == 'kaiming':
+        nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+      elif init_type == 'orthogonal':
+        nn.init.orthogonal_(m.weight.data, gain=gain)
+
+      if hasattr(m, 'bias') and m.bias is not None:
+        nn.init.constant_(m.bias.data, 0.0)
+
+    elif classname.find('BatchNorm2d') != -1:
+      nn.init.normal_(m.weight.data, 1.0, gain)
+      nn.init.constant_(m.bias.data, 0.0)
+
+  model.apply(init_func)
+
+
+class decoder(nn.Module):
+  def __init__(self):
+    super(encoder, self).__init__(time_steps=12)
+    self.conv_dim = 64
+    self.time_steps = time_steps
+    self.decoder = nn.Sequential(
+        nn.Conv2d(16, 256, 3, 1, 1),
+        nn.ReLU(True),
+        nn.Conv2d(256, 256, 3, 1, 1),
+        nn.ReLU(True),
+        nn.Conv2d(256, 256, 3, 1, 1),
+        nn.ReLU(True),
+        nn.Upsample(scale_factor=2, mode='nearest'),
+        nn.Conv2d(256, 128, 3, 1, 1),
+        nn.ReLU(True),
+        nn.Conv2d(128, 128, 3, 1, 1),
+        nn.ReLU(True),
+        nn.Upsample(scale_factor=2, mode='nearest'),
+        nn.Conv2d(128, 64, 3, 1, 1),
+        nn.ReLU(True),
+        nn.Conv2d(64, 3, 3, 1, 1),
+        nn.Tanh()
+      )
+    self.apply(init_weights)
+
+  def forward(self, feat):
+
+    out = self.decoder(feat) 
+    out = out.contiguous().view(-1, self.time_steps, *out.shape[1:])
     return out
 
 class VideoDiscriminator(nn.Module):

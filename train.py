@@ -13,6 +13,7 @@ import math
 import numpy as np
 from tqdm import tqdm, trange
 
+os.environ["CUDA_VISIBLE_DEVICES"]="0, 1, 2, 3, 4, 5, 6, 7, 8"
 
 import torch
 import torch.nn as nn

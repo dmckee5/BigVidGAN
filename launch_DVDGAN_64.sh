@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 /usr/bin/python3 train.py \
 --biggan_init --biggan_weights_root '/home/ubuntu/nfs/xdu12/BigGAN-PyTorch/weights/BigGAN_I64_seed0_Gch96_Dch96_bs256_Glr1.0e-04_Dlr4.0e-04_Gnlinplace_relu_Dnlinplace_relu_Ginitortho_Dinitortho_Gattn32_Dattn256_Gshared_ema' \
 --avg_pixel_loss_weight 0. --pixel_loss_kicksin 0 \
 --dataset Kinetics400 --annotation_file '/home/nfs/data/trainlist01.txt' --parallel --shuffle \
---num_workers 32 --batch_size 108 --load_in_mem  \
+--num_workers 32 --batch_size 64 --load_in_mem  \
 --num_G_accumulations 1 --num_D_accumulations 1 --num_epochs 5000 \
 --num_D_steps 2 --G_lr 5e-4 --D_lr 1e-4 --D_B2 0.999 --G_B2 0.999 \
 --G_attn 32 --D_attn 0 \
@@ -21,7 +21,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 /usr/bin/python3 train.py \
 --frame_size 64 \
 --G_init N02 --D_init N02 \
 --dim_z 120 --G_shared --shared_dim 120 \
---G_ch 64 --D_ch 64 \
+--G_ch 96 --D_ch 96 \
 --ema --use_ema --ema_start 1000 \
 --test_every 2000 --save_every 100 --num_best_copies 5 --num_save_copies 0 --seed 0 \
 --logs_root '/home/ubuntu/nfs/xdu12/dvd-gan/logs/' \

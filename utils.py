@@ -955,20 +955,28 @@ def load_biggan_weights(G, D, state_dict, weights_root,
     pretrained_G_dict = {k:v for k, v in pretrained_G_dict.items() if k in G_model_dict and k not in ['linear.weight', 'shared.weight', 'linear.u0', 'linear.bias']} #filter out unnecessary keys from BigGAN
     G_model_dict.update(pretrained_G_dict)                                               #update superset dict with pretrained weights
     G.load_state_dict(G_model_dict, strict=strict)                                       #load weights in model
+    for name, child in G.named_children():
+      if name in pretrained_G_dict.keys():
+        for param in child.parameters():
+          param.requires_grad = False
 
     if load_optim:
       G.optim.load_state_dict(
         torch.load('%s/%s.pth' % (root, join_strings('_', ['G_optim', name_suffix]))))
-  if D is not None:
-    D_model_dict = D.state_dict()
-    pretrained_D_dict = torch.load('%s/%s.pth' % (root,'D')) #load BigGAN's state_dict
-    pretrained_D_dict = {k:v for k,v in pretrained_D_dict.items() if k in D_model_dict}         #filter out unnecessary keys from BigGAN
-    D_model_dict.update(pretrained_D_dict)                                                      #update superset dict with pretrained weights
-    D.load_state_dict(D_model_dict, strict=strict)                                              #load weights in model
+  # if D is not None:
+  #   D_model_dict = D.state_dict()
+  #   pretrained_D_dict = torch.load('%s/%s.pth' % (root,'D')) #load BigGAN's state_dict
+  #   pretrained_D_dict = {k:v for k,v in pretrained_D_dict.items() if k in D_model_dict and k not in ['embed.weight', 'embed.u0']}         #filter out unnecessary keys from BigGAN
+  #   D_model_dict.update(pretrained_D_dict)                                                      #update superset dict with pretrained weights
+  #   D.load_state_dict(D_model_dict, strict=strict)                                              #load weights in model
+    # for name, child in D.named_children():
+    #   if name in pretrained_D_dict.keys():
+    #     for param in child.parameters():
+    #       param.requires_grad = False
 
-    if load_optim:
-      D.optim.load_state_dict(
-        torch.load('%s/%s.pth' % (root, join_strings('_', ['D_optim', name_suffix]))))
+    # if load_optim:
+    #   D.optim.load_state_dict(
+    #     torch.load('%s/%s.pth' % (root, join_strings('_', ['D_optim', name_suffix]))))
 
 
   # Load state dict
