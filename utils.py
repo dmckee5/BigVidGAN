@@ -162,7 +162,7 @@ def prepare_parser():
     help='Turn off separate attention in G?(default: %(default)s)')
   parser.add_argument(
     '--no_Dv', action='store_true', default=False,
-    help='Turn off video discriminator in G?(default: %(default)s)')
+    help='Turn off video discriminator?(default: %(default)s)')
   parser.add_argument(
     '--no_avg_pixel_loss', action='store_true', default=False,
     help='Turn off average pixel loss in G_loss?(default: %(default)s)')
@@ -180,6 +180,10 @@ def prepare_parser():
   parser.add_argument(
     '--D_loss_weight', type=float, default=1.0,
     help='What is the weight of D loss to Dv loss (Default1:1): %(default)s)')
+  #Xiaodan: Added by xiaodan
+  parser.add_argument(
+    '--Dv_no_res', action='store_true', default=False,
+    help='Use conventional 3D conv layers instead of 3d resnet for Dv?(default: %(default)s)')
 
 
   ### Model init stuff ###

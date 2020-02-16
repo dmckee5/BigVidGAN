@@ -384,21 +384,21 @@ def D_vid_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
                'resolution' : [64, 32, 16, 8, 4, 4 ],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,7)},
-                '3D resnet' :[True] * 2 + [False] * 4       }
+                '3D block' :[True] * 2 + [False] * 4       }
   arch[128] = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4, 8]],
                'out_channels' : [item * ch for item in [1, 2, 4, 8, 16]],
                'downsample' : [True] * 4 + [False],
                'resolution' : [32, 16, 8, 4, 4],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,7)},
-                '3D resnet' :[True] * 2 + [False] * 3       }
+                '3D block' :[True] * 2 + [False] * 3       }
   arch[64]  = {'in_channels' :  [3] + [ch*item for item in [1, 2, 4]],
                'out_channels' : [item * ch for item in [1, 2, 4, 8]],
                'downsample' : [True] * 3 + [False],
                'resolution' : [16, 8, 4, 4],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,6)},
-               '3D resnet' :[True] * 2 + [False] * 2       }
+               '3D block' :[True] * 2 + [False] * 2       }
 
   arch[32]  = {'in_channels' :  [3] + [item * ch for item in [4, 4]],
                'out_channels' : [item * ch for item in [4, 4, 4]],
@@ -406,7 +406,7 @@ def D_vid_arch(ch=64, attention='64',ksize='333333', dilation='111111'):
                'resolution' : [8, 4, 4],
                'attention' : {2**i: 2**i in [int(item) for item in attention.split('_')]
                               for i in range(2,4)},
-                '3D resnet' :[True] * 2 + [False]       }
+                '3D block' :[True] * 2 + [False]       }
   return arch
 
 class ImageDiscriminator(nn.Module):
@@ -593,7 +593,7 @@ class decoder(nn.Module):
 
   def forward(self, feat):
 
-    out = self.decoder(feat) 
+    out = self.decoder(feat)
     out = out.contiguous().view(-1, self.time_steps, *out.shape[1:])
     return out
 
@@ -632,6 +632,8 @@ class VideoDiscriminator(nn.Module):
     self.fp16 = D_fp16
     # Architecture
     self.arch = D_vid_arch(self.ch, self.attention)[resolution]
+    #Xiaodan: Added by xiaodan
+    self.Dv_no_res = kwargs['Dv_no_res']
 
     # Which convs, batchnorms, and linear layers to use
     # No option to turn off SN in D right now
@@ -655,24 +657,35 @@ class VideoDiscriminator(nn.Module):
       self.which_embedding = functools.partial(layers.SNEmbedding,
                               num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
                               eps=self.SN_eps)
+      self.conv3d_no_res = functools.partial(nn.Conv3d,
+                            kernel_size=3, padding=1, stride=2
+                            )
     # Prepare model
     # self.blocks is a doubly-nested list of modules, the outer loop intended
     # to be over blocks at a given resolution (resblocks and/or self-attention)
     self.blocks = []
     for index in range(len(self.arch['out_channels'])):
-      if self.arch['3D resnet'][index]:
-        self.blocks += [[layers.BasicBlock(
-                         in_planes=self.arch['in_channels'][index],
-                         out_planes=self.arch['out_channels'][index],
-                         which_conv1 = self.which_conv3d_1,
-                         which_conv2 = self.which_conv3d_2,
-                         downsample=(nn.Conv3d(
-                                        self.arch['in_channels'][index],
-                                        self.arch['out_channels'][index],
-                                        kernel_size=1,
-                                        stride=2,
-                                        bias=False) if self.arch['downsample'][index] else None)
-                          )]]
+      if self.arch['3D block'][index]:
+        if self.Dv_no_res == False:
+          self.blocks += [[layers.BasicBlock(
+                           in_planes=self.arch['in_channels'][index],
+                           out_planes=self.arch['out_channels'][index],
+                           which_conv1 = self.which_conv3d_1,
+                           which_conv2 = self.which_conv3d_2,
+                           downsample=(nn.Conv3d(
+                                          self.arch['in_channels'][index],
+                                          self.arch['out_channels'][index],
+                                          kernel_size=1,
+                                          stride=2,
+                                          bias=False) if self.arch['downsample'][index] else None)
+                            )]]
+        else:
+          print('Using 3D Conv layers instead of 3D resnet')
+          self.blocks += [[layers.Conv3DBlock(
+                           in_planes=self.arch['in_channels'][index],
+                           out_planes=self.arch['out_channels'][index],
+                           which_conv = self.conv3d_no_res
+                           )]]
       else:
         self.blocks += [[layers.DBlock(in_channels=self.arch['in_channels'][index],
                        out_channels=self.arch['out_channels'][index],
@@ -691,7 +704,7 @@ class VideoDiscriminator(nn.Module):
     self.blocks = nn.ModuleList([nn.ModuleList(block) for block in self.blocks])
     # Linear output layer. The output dimension is typically 1, but may be
     # larger if we're e.g. turning this into a VAE with an inference output
-    t_dim_red_const = self.arch['3D resnet'].count(True) * 2
+    t_dim_red_const = self.arch['3D block'].count(True) * 2
     even =  self.time_steps % 2
     reduced_t_dim = (self.time_steps // t_dim_red_const + even)
     self.linear = self.which_linear(self.arch['out_channels'][-1] * reduced_t_dim, output_dim)
@@ -742,7 +755,7 @@ class VideoDiscriminator(nn.Module):
     h = self.InitDownsample(h) #[B,C,T,H/2,W/2]
     # Loop over blocks
     for index, blocklist in enumerate(self.blocks):
-      if not self.arch['3D resnet'][index] and index > 0 and self.arch['3D resnet'][index-1]:
+      if not self.arch['3D block'][index] and index > 0 and self.arch['3D block'][index-1]:
         h = h.permute(0,2,1,3,4)#[B,T*,C*,H*,W*]
         h = h.contiguous().view(-1,*h.shape[2:]) #[BT*,C*,H*,W*]
       for block in blocklist:

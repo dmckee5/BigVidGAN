@@ -5,8 +5,8 @@
 #--ema --use_ema --ema_start 20000 \
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 /usr/bin/python3 train.py \
---resume \
---experiment_name 'sum_after_D_hinge_weight_1' --D_hinge_loss_sum 'after' --D_loss_weight 1.0 \
+--experiment_name 'Dv_no_res' --D_hinge_loss_sum 'after' --D_loss_weight 1.0 \
+--Dv_no_res \
 --avg_pixel_loss_weight 0. --pixel_loss_kicksin 0 \
 --dataset Kinetics400 --annotation_file '/home/nfs/data/trainlist01.txt' --parallel --shuffle \
 --num_workers 32 --batch_size 108 --load_in_mem  \

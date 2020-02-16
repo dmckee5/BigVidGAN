@@ -710,5 +710,21 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
 
         return out
+
+class Conv3DBlock(nn.Module):
+    # expansion = 1
+    def __init__(self, in_planes, out_planes, which_conv):
+        super(Conv3DBlock, self).__init__()
+        self.conv1 = which_conv(in_planes, out_planes)
+        self.relu = nn.ReLU(inplace=True)
+
+
+    def forward(self, x):
+
+        out = self.conv1(x)
+
+        out = self.relu(out)
+
+        return out
 # dogball
 #test
