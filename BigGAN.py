@@ -535,6 +535,7 @@ class ImageDiscriminator(nn.Module):
     # print('embed(y) shape image', self.embed(y).shape)
     # print('h shape image', h.shape)
     # Get projection of final featureset onto class vectors and add to evidence
+    # print('y,embed y, sum y',y.shape,self.embed(y).shape,torch.sum(self.embed(y) * h, 1, keepdim=True).shape)
     out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
     return out
 def init_weights(model, init_type='xavier', gain=0.02):
@@ -634,6 +635,7 @@ class VideoDiscriminator(nn.Module):
     self.arch = D_vid_arch(self.ch, self.attention)[resolution]
     #Xiaodan: Added by xiaodan
     self.Dv_no_res = kwargs['Dv_no_res']
+    self.T_into_B = kwargs['T_into_B']
 
     # Which convs, batchnorms, and linear layers to use
     # No option to turn off SN in D right now
@@ -706,10 +708,15 @@ class VideoDiscriminator(nn.Module):
     # larger if we're e.g. turning this into a VAE with an inference output
     t_dim_red_const = self.arch['3D block'].count(True) * 2
     even =  self.time_steps % 2
-    reduced_t_dim = (self.time_steps // t_dim_red_const + even)
-    self.linear = self.which_linear(self.arch['out_channels'][-1] * reduced_t_dim, output_dim)
+    self.reduced_t_dim = (self.time_steps // t_dim_red_const + even)
+
     # Embedding for projection discrimination
-    self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1] * reduced_t_dim)
+    if self.T_into_B == False:
+      self.linear = self.which_linear(self.arch['out_channels'][-1] * reduced_t_dim, output_dim)
+      self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1] * reduced_t_dim)
+    else:
+      self.linear = self.which_linear(self.arch['out_channels'][-1], output_dim)
+      self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1])
 
     # Initialize weights
     if not skip_init:
@@ -748,11 +755,15 @@ class VideoDiscriminator(nn.Module):
         self.param_count += sum([p.data.nelement() for p in module.parameters()])
     print('Param count for Dv''s initialized parameters: %d' % self.param_count)
 
-  def forward(self, x, y=None):
+  def forward(self, x, y=None,tensor_writer=None, iteration=None):
     # Stick x into h for cleaner for loops without flow control
     h = x #[B,T,C,H,W]
+    # if tensor_writer != None and iteration % 1000 == 0:
+    #     tensor_writer.add_video('Before Downsampling', (h[-2:] + 1)/2, iteration)
     h = h.permute(0,2,1,3,4).contiguous() #[B,C,T,H,W]
     h = self.InitDownsample(h) #[B,C,T,H/2,W/2]
+    # if tensor_writer != None and iteration % 1000 == 0:
+    #     tensor_writer.add_video('After Downsampling', (h[-2:].permute(0,2,1,3,4) + 1)/2, iteration)
     # Loop over blocks
     for index, blocklist in enumerate(self.blocks):
       if not self.arch['3D block'][index] and index > 0 and self.arch['3D block'][index-1]:
@@ -763,27 +774,37 @@ class VideoDiscriminator(nn.Module):
     # [BT*,C*,H*,W*]
     # Apply global sum pooling as in SN-GAN
     h = torch.sum(self.activation(h), [2, 3]) # [BT*,C*]
-    h = h.contiguous().view(x.shape[0],-1,h.shape[-1]) # [B,T*,C*]
-    h = h.contiguous().view(x.shape[0],-1)# [B,T*C*]
+    if self.T_into_B == False:
+      h = h.contiguous().view(x.shape[0],-1,h.shape[-1]) # [B,T*,C*]
+      h = h.contiguous().view(x.shape[0],-1)# [B,T*C*]
     # Get initial class-unconditional output
-    out = self.linear(h) # [B,1]
+    out = self.linear(h) # [B,1] if T_into_B False; [BT*,1] True
     # Get projection of final featureset onto class vectors and add to evidence
-    # print('y.shape', y.shape)
+    # print('y.shape', y.shape) #28
     # print('embed(y) shape', self.embed(y).shape)
     # print('h shape', h.shape)
+    # repetition = 1
+    # if self.T_into_B == True:
+    #   # repetition = int(h.shape[0]/x.shape[0]) #T*
+    #   y = y.unsqueeze(1).repeat(1,self.reduced_t_dim,1) #[B,T*,120]
+    #   # print(y.shape)
+    #   y = y.contiguous().view(-1,*y.shape[2:]) #[BT*,120]
+    # print('Shapes:',out.shape, self.embed(y).shape, h.shape)
     out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
-    return out
+
+    return out, self.reduced_t_dim
 
 
 # Parallelized G_D to minimize cross-gpu communication
 # Without this, Generator outputs would get all-gathered and then rebroadcast.
 class G_D(nn.Module):
-  def __init__(self, G, D, Dv = None, k=8):
+  def __init__(self, G, D, Dv = None, k=8, T_into_B=False):
     super(G_D, self).__init__()
     self.G = G
     self.D = D
     self.Dv = Dv
     self.k = k
+    self.T_into_B = T_into_B
     # print('self.k',self.k)
   def forward(self, z, gy, x=None, dy=None, train_G=False, return_G_z=False,
               split_D=False, tensor_writer = None, iteration = None):
@@ -802,32 +823,45 @@ class G_D(nn.Module):
       if self.D.fp16 and not self.G.fp16:
         G_z = G_z.half()
     #xiaodan: need to sample for k frames
+    # print('gy,dy',gy.shape,dy.shape)
     import utils
     if self.k > 1:
-      sampled_G_z,sampled_gy = utils.sample_frames(G_z,gy,self.k) # [B,8,C,H,W], [B,8,120]
+      sampled_G_z,sampled_gy = utils.sample_frames(G_z,gy,self.k) # [B,8,C,H,W], [B,8]
       sampled_G_z = sampled_G_z.contiguous().view(-1,*G_z.shape[2:])# [B*8,C,H,W]
-      sampled_gy = sampled_gy.contiguous().view(-1,*gy.shape[2:]) # [B*8,120]
+      sampled_gy = sampled_gy.contiguous().view(-1,*gy.shape[2:]) # [B*8]
+      # print('sampled_gy',sampled_gy.shape)
     else:
       sampled_G_z, sampled_gy = G_z.squeeze(), gy
     if x is not None and dy is not None:
       # print('x and dy shape',x.shape,dy.shape)
       if self.k > 1:
-        sampled_x, sampled_dy = utils.sample_frames(x,dy,self.k) # [B,8,C,H,W], [B,8,120]
+        sampled_x, sampled_dy = utils.sample_frames(x,dy,self.k) # [B,8,C,H,W], [B,8]
         sampled_x = sampled_x.contiguous().view(-1,*x.shape[2:])# [B*8,C,H,W]
-        sampled_dy = sampled_dy.contiguous().view(-1,*dy.shape[2:]) # [B*8,120]
+        sampled_dy = sampled_dy.contiguous().view(-1,*dy.shape[2:]) # [B*8]
       else:
         sampled_x, sampled_dy = x.squeeze(), dy
+    if self.Dv != None:
+      if self.T_into_B:
+        duplicated_gy = utils.duplicate_y(gy,self.Dv.reduced_t_dim).contiguous().view(-1,*gy.shape[2:]) # [B*3]
+        if dy is not None:
+          duplicated_dy = utils.duplicate_y(dy,self.Dv.reduced_t_dim).contiguous().view(-1,*dy.shape[2:]) # [B*3]
+      else:
+        duplicated_gy = gy
+        if dy is not None:
+          duplicated_dy = dy
+    # print('duplicated_gy and duplicated_dy',duplicated_gy.shape,duplicated_dy.shape)
+
 
     # Split_D means to run D once with real data and once with fake,
     # rather than concatenating along the batch dimension.
     if split_D:
       D_fake = self.D(sampled_G_z, sampled_gy)
       if self.Dv != None:
-        Dv_fake = self.Dv(G_z, gy)
+        Dv_fake, repetition = self.Dv(G_z, duplicated_gy)
       if x is not None:
         D_real = self.D(sampled_x, sampled_dy)
         if self.Dv != None:
-          Dv_real = self.Dv(x, dy)
+          Dv_real, repetition = self.Dv(x, duplicated_dy, tensor_writer=tensor_writer, iteration=iteration)
           return D_fake, D_real, Dv_fake, Dv_real, G_z
         else:
           return D_fake, D_real, G_z
@@ -847,14 +881,18 @@ class G_D(nn.Module):
       D_input = torch.cat([sampled_G_z, sampled_x], 0) if x is not None else sampled_G_z
       D_class = torch.cat([sampled_gy, sampled_dy], 0) if dy is not None else sampled_gy
       Dv_input = torch.cat([G_z, x], 0) if x is not None else G_z
-      Dv_class = torch.cat([gy, dy], 0) if dy is not None else gy
+      Dv_class = torch.cat([duplicated_gy, duplicated_dy], 0) if dy is not None else duplicated_gy
+      # print('duplicated gy dy', duplicated_gy.shape,duplicated_dy.shape)
       # Get Discriminator output
       D_out = self.D(D_input, D_class)
       if self.Dv != None:
-        Dv_out = self.Dv(Dv_input, Dv_class)
+        # print('Entering line 890')
+        Dv_out, repetition = self.Dv(Dv_input, Dv_class, tensor_writer=tensor_writer, iteration=iteration)
+        # print('Left line 890')
       if x is not None:
         if self.Dv != None:
-          D_out_fake, D_out_real, Dv_out_fake, Dv_out_real = list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]])) + list(torch.split(Dv_out, [G_z.shape[0], x.shape[0]])) # D_fake, D_real
+          D_out_fake, D_out_real, Dv_out_fake, Dv_out_real = list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]])) + list(torch.split(Dv_out, [repetition*G_z.shape[0], repetition*x.shape[0]])) # D_fake, D_real
+          # print('Shapes:',D_out_fake.shape, D_out_real.shape, Dv_out_fake.shape, Dv_out_real.shape, G_z.shape)
           return D_out_fake, D_out_real, Dv_out_fake, Dv_out_real, G_z
         else:
           D_out_fake, D_out_real = list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]]))  # D_fake, D_real

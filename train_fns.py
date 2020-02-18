@@ -34,7 +34,7 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
     if config['no_Dv'] == False:
       Dv.optim.zero_grad()
 
-    if tensor_writer != None and iteration % 100 == 0:
+    if tensor_writer != None and iteration % config['log_results_every'] == 0:
       tensor_writer.add_video('Loaded Data', (x + 1)/2, iteration)
       mean_pixel_val = torch.mean((x+1)/2, dim=[0, 1, 3, 4])
       tensor_writer.add_scalar('Pixel vals/Mean Red Pixel values, real data', float(mean_pixel_val[0].item()), iteration)
@@ -78,11 +78,11 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
         if config['no_Dv'] == False:
           D_fake, D_real, Dv_fake, Dv_real, G_z = GD(z_[:config['batch_size']], y_[:config['batch_size']],
                               x[counter], y[counter], train_G=False,
-                              split_D=config['split_D'])
+                              split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
         else:
           D_fake, D_real, G_z = GD(z_[:config['batch_size']], y_[:config['batch_size']],
                               x[counter], y[counter], train_G=False,
-                              split_D=config['split_D'])
+                              split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
         # print('GD.k in train_fns line 49',GD.module.k) #GD.module because GD is now dataparallel class
         # D_fake & D_real shapes: [Bk,1], [Bk,1]
         # xiaodan: Make scores back to [B,k,1] for easier summation in discriminator_loss
@@ -94,9 +94,20 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
         # Compute components of D's loss, average them, and divide by
         # the number of gradient accumulations
         D_loss_real, D_loss_fake = losses.discriminator_loss(D_fake, D_real, config['D_hinge_loss_sum'])
+
+        # Dv_fake & Dv_real shapes: [BT*,1], [BT*,1] if T_into_B; [B,1], [B,1] if False
         if config['no_Dv'] == False:
           # print('Dv_fake shape',Dv_fake.shape)
-          Dv_loss_real, Dv_loss_fake = losses.discriminator_loss(Dv_fake, Dv_real, 'before')
+          if config['T_into_B'] == True:
+            Dv_fake = Dv_fake.contiguous().view(D_fake.shape[0],-1,*Dv_fake.shape[1:])#[B,T*,1]
+            Dv_real = Dv_real.contiguous().view(D_real.shape[0],-1,*Dv_real.shape[1:])#[B,T*,1]
+            if config['Dv_hinge_loss_sum'] == 'before':
+              Dv_fake = torch.sum(Dv_fake,1) #xiaodan: add T* scores before doing hinge loss
+              Dv_real = torch.sum(Dv_real,1) #[B,1]
+            Dv_loss_real, Dv_loss_fake = losses.discriminator_loss(Dv_fake, Dv_real, config['Dv_hinge_loss_sum'])
+          else:
+            #Xiaodan: If T_into_B is False, must use "before" for hinge loss.
+            Dv_loss_real, Dv_loss_fake = losses.discriminator_loss(Dv_fake, Dv_real, 'before')
           D_loss = (D_loss_real + D_loss_fake + Dv_loss_fake + Dv_loss_real) / float(config['num_D_accumulations'])
         else:
           D_loss = (D_loss_real + D_loss_fake) / float(config['num_D_accumulations'])
@@ -137,11 +148,14 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       else:
         D_fake, G_z= GD(z_, y_, train_G=True, split_D=config['split_D'], tensor_writer=tensor_writer, iteration=iteration)
 
-      D_fake = D_fake.contiguous().view(-1,GD.module.k,*D_fake.shape[1:])
-      D_fake = torch.mean(D_fake,1) #xiaodan: add k scores before doing hinge loss, according to the paper
+      D_fake = D_fake.contiguous().view(-1,GD.module.k,*D_fake.shape[1:]) #[B, k, 1]
+      D_fake = torch.mean(D_fake,1) # [B,1]  xiaodan: average k scores before doing hinge loss
 
       G_loss = config['D_loss_weight'] * losses.generator_loss(D_fake) / float(config['num_G_accumulations'])
       if config['no_Dv'] == False:
+        if config['T_into_B'] == True:
+          Dv_fake = Dv_fake.contiguous().view(D_fake.shape[0],-1,*Dv_fake.shape[1:])#[B,T*,1]
+          Dv_fake = torch.mean(Dv_fake,1) # [B,1]
         G_loss += losses.generator_loss(Dv_fake) / float(config['num_G_accumulations'])
       #Added by Xiaodan to take avg. pixel value into account as an additional losses
       # print(type(G_loss))
@@ -183,7 +197,7 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       out = {'G_loss': float(G_loss.item()),
               'D_loss_real': float(D_loss_real.item()),
               'D_loss_fake': float(D_loss_fake.item())}
-    if tensor_writer != None and iteration % 100 == 0:
+    if tensor_writer != None and iteration % config['log_results_every'] == 0:
       tensor_writer.add_video('Video Results', (G_z + 1)/2, iteration)
       mean_pixel_val = torch.mean((G_z + 1)/2, dim=[0, 1, 3, 4])
       tensor_writer.add_scalar('Pixel vals/Mean Red Pixel values, fake data', float(mean_pixel_val[0].item()), iteration)
@@ -195,22 +209,22 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
       tensor_writer.add_text('Generated Labels',' | '.join(y_Gz_text),iteration)
 
     # Return G's loss and the components of D's loss.
-    if config['no_avg_pixel_loss'] == False:
-      tensor_writer.add_scalar('Loss/avg_pixel_loss', mean_pixel_loss, iteration)
-    tensor_writer.add_scalar('Loss/G_loss', out['G_loss'], iteration)
-    tensor_writer.add_scalar('Loss/D_loss_real', out['D_loss_real'], iteration)
-    tensor_writer.add_scalar('Loss/D_loss_fake', out['D_loss_fake'], iteration)
-    if config['no_Dv'] == False:
-      tensor_writer.add_scalar('Loss/Dv_loss_fake', out['Dv_loss_fake'], iteration)
-      tensor_writer.add_scalar('Loss/Dv_loss_real', out['Dv_loss_real'], iteration)
-    if config['no_convgru'] == False:
-      tensor_writer.add_scalar('Gradient/G_grad_gates', G_grad_gates, iteration)
-      tensor_writer.add_scalar('Gradient/G_grad_can', G_grad_can, iteration)
-      tensor_writer.add_scalar('Gradient/G_grad_first_layer', G_grad_first_layer, iteration)
+      if config['no_avg_pixel_loss'] == False:
+        tensor_writer.add_scalar('Loss/avg_pixel_loss', mean_pixel_loss, iteration)
+      tensor_writer.add_scalar('Loss/G_loss', out['G_loss'], iteration)
+      tensor_writer.add_scalar('Loss/D_loss_real', out['D_loss_real'], iteration)
+      tensor_writer.add_scalar('Loss/D_loss_fake', out['D_loss_fake'], iteration)
+      if config['no_Dv'] == False:
+        tensor_writer.add_scalar('Loss/Dv_loss_fake', out['Dv_loss_fake'], iteration)
+        tensor_writer.add_scalar('Loss/Dv_loss_real', out['Dv_loss_real'], iteration)
+      if config['no_convgru'] == False:
+        tensor_writer.add_scalar('Gradient/G_grad_gates', G_grad_gates, iteration)
+        tensor_writer.add_scalar('Gradient/G_grad_can', G_grad_can, iteration)
+        tensor_writer.add_scalar('Gradient/G_grad_first_layer', G_grad_first_layer, iteration)
 
-      tensor_writer.add_scalar('Weight/G_weight_gates', G_weight_gates, iteration)
-      tensor_writer.add_scalar('Weight/G_weight_can', G_weight_can, iteration)
-      tensor_writer.add_scalar('Weight/G_weight_first_layer', G_weight_first_layer, iteration)
+        tensor_writer.add_scalar('Weight/G_weight_gates', G_weight_gates, iteration)
+        tensor_writer.add_scalar('Weight/G_weight_can', G_weight_can, iteration)
+        tensor_writer.add_scalar('Weight/G_weight_first_layer', G_weight_first_layer, iteration)
     return out
   return train
 

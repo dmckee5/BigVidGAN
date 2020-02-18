@@ -95,9 +95,9 @@ def run(config):
     if config['no_Dv'] == False:
       Dv = Dv.half()
     # Consider automatically reducing SN_eps?
-  GD = model.G_D(G, D,Dv, config['k']) #xiaodan: add an argument k
+  GD = model.G_D(G, D,Dv, config['k'], config['T_into_B']) #xiaodan: add an argument k and T_into_B
   # print('GD.k in train.py line 91',GD.k)
-  # print(G) # xiaodan: print disabled by xiaodan. Too many stuff
+  # print(G) # xiaodan: print disabled by xiaodan. Too many stuffs
   # print(D)
   if config['no_Dv'] == False:
     print('Number of params in G: {} D: {} Dv: {}'.format(

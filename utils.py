@@ -178,12 +178,18 @@ def prepare_parser():
     '--D_hinge_loss_sum', type=str, default='before',
     help='Whether sum the scores of k frames obtained from D before or after (default: %(default)s)')
   parser.add_argument(
+    '--Dv_hinge_loss_sum', type=str, default='before',
+    help='Whether sum the scores of k frames obtained from Dv before or after (default: %(default)s)')
+  parser.add_argument(
     '--D_loss_weight', type=float, default=1.0,
     help='What is the weight of D loss to Dv loss (Default1:1): %(default)s)')
   #Xiaodan: Added by xiaodan
   parser.add_argument(
     '--Dv_no_res', action='store_true', default=False,
     help='Use conventional 3D conv layers instead of 3d resnet for Dv?(default: %(default)s)')
+  parser.add_argument(
+    '--T_into_B', action='store_true', default=False,
+    help='In Dv, Fold T into B before linear layer?(default: %(default)s)')
 
 
   ### Model init stuff ###
@@ -345,6 +351,10 @@ def prepare_parser():
     '--config_from_name', action='store_true', default=False,
     help='Use a hash of the experiment name instead of the full config '
          '(default: %(default)s)')
+  #Xiaodan: Added by Xiaodan
+  parser.add_argument(
+    '--log_results_every', type=int, default=500,
+    help='Log to Tensorboard every X iterations (default: %(default)s)')
 
   ### EMA Stuff ###
   parser.add_argument(
@@ -1489,3 +1499,6 @@ def sample_frames(x, y, k=8): #[B,T,C,H,W]
     weights = torch.arange(x.shape[1], dtype=torch.float)
     index=torch.multinomial(weights, k, replacement=False, out=None)
     return x[:,index,:,:,:], y.unsqueeze(1).repeat(1,k,1)
+
+def duplicate_y(y,repetition = 3):
+    return y.unsqueeze(1).repeat(1,repetition,1)
