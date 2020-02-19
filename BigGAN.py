@@ -712,8 +712,8 @@ class VideoDiscriminator(nn.Module):
 
     # Embedding for projection discrimination
     if self.T_into_B == False:
-      self.linear = self.which_linear(self.arch['out_channels'][-1] * reduced_t_dim, output_dim)
-      self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1] * reduced_t_dim)
+      self.linear = self.which_linear(self.arch['out_channels'][-1] * self.reduced_t_dim, output_dim)
+      self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1] * self.reduced_t_dim)
     else:
       self.linear = self.which_linear(self.arch['out_channels'][-1], output_dim)
       self.embed = self.which_embedding(self.n_classes, self.arch['out_channels'][-1])
@@ -791,8 +791,10 @@ class VideoDiscriminator(nn.Module):
     #   y = y.contiguous().view(-1,*y.shape[2:]) #[BT*,120]
     # print('Shapes:',out.shape, self.embed(y).shape, h.shape)
     out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
-
-    return out, self.reduced_t_dim
+    if self.T_into_B:
+      return out, self.reduced_t_dim
+    else:
+      return out, 1
 
 
 # Parallelized G_D to minimize cross-gpu communication
@@ -891,6 +893,7 @@ class G_D(nn.Module):
         # print('Left line 890')
       if x is not None:
         if self.Dv != None:
+          # print('repetition,Dv_out,G_z,x',repetition,Dv_out.shape,G_z.shape,x.shape)
           D_out_fake, D_out_real, Dv_out_fake, Dv_out_real = list(torch.split(D_out, [sampled_G_z.shape[0], sampled_x.shape[0]])) + list(torch.split(Dv_out, [repetition*G_z.shape[0], repetition*x.shape[0]])) # D_fake, D_real
           # print('Shapes:',D_out_fake.shape, D_out_real.shape, Dv_out_fake.shape, Dv_out_real.shape, G_z.shape)
           return D_out_fake, D_out_real, Dv_out_fake, Dv_out_real, G_z
