@@ -6,7 +6,7 @@
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 /usr/bin/python3 train.py \
 --resume \
---experiment_name 'Dv_no_res' --D_hinge_loss_sum 'after' --D_loss_weight 1.0 \
+--experiment_name 'T_into_B' --D_hinge_loss_sum 'after' --Dv_hinge_loss_sum 'after' --T_into_B --D_loss_weight 1.0 \
 --Dv_no_res \
 --avg_pixel_loss_weight 0. --pixel_loss_kicksin 0 \
 --dataset Kinetics400 --annotation_file '/home/nfs/data/trainlist01.txt' --parallel --shuffle \
