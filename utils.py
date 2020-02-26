@@ -1498,7 +1498,7 @@ def sample_frames(x, y, k=8): #[B,T,C,H,W]
     # print('x and y in sample_frames',x.shape,y.shape)
     weights = torch.arange(x.shape[1], dtype=torch.float)
     index=torch.multinomial(weights, k, replacement=False, out=None)
-    return x[:,index,:,:,:], y.unsqueeze(1).repeat(1,k,1)
+    return x[:,index,:,:,:], y.unsqueeze(1).repeat(1,k)
 
 def duplicate_y(y,repetition = 3):
-    return y.unsqueeze(1).repeat(1,repetition,1)
+    return y.unsqueeze(1).repeat(1,repetition)

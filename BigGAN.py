@@ -289,6 +289,11 @@ class Generator(nn.Module):
   # interpolation later. If we passed in the one-hot and then ran it through
   # G.shared in this forward function, it would be harder to handle.
   def forward(self, z, y):
+    # print('z in G shape',z.shape)
+    # y shape: [B,128], norm of each y is around 2.5 to 3
+    # z shape: [B,128], norm of each z is around 10 to 11
+    # print('z in G norm ',torch.norm(z,dim=1).mean())
+    # print('y in G norm ',torch.norm(y,dim=1).mean())
     # If hierarchical, concatenate zs and ys
     if self.hier:
       zs = torch.split(z, self.z_chunk_size, 1)
@@ -300,7 +305,7 @@ class Generator(nn.Module):
     # xiaodan: concatenate z and y, then send into convgru
     if self.no_convgru == False:
       if self.G_shared:
-        zy = torch.cat((z,y),1) # [B, 240]
+        zy = torch.cat((z,y),1) # [B, 256]
       else:
         zy = z
       layer_output_list, last_state_list = self.convgru(zy)
@@ -326,10 +331,14 @@ class Generator(nn.Module):
         # ys_BT = ys[index].repeat(self.time_steps,1,1).permute(1,0,2).contiguous().view(-1,y.shape[-1])
         #xiaodan: added if else statement to account when G_shared==False
         if len(y.shape)>1:
-            ys_BT = ys[index].repeat(self.time_steps,1,1).permute(1,0,2).contiguous().view(-1,y.shape[-1])
+            ys_BT = ys[index].repeat(self.time_steps,1,1).permute(1,0,2).contiguous().view(-1,y.shape[-1]) # [BT,128]
         else:
             ys_BT = ys[index].repeat(self.time_steps,1).permute(1,0).contiguous()
-        # print('y and ys_BT shape',y.shape,ys_BT.shape)
+        # print('ys_BT shape in G',ys_BT.shape)
+        # print('h first column',h[:,0,0,0])
+        # print('ys_BT first column',ys_BT[:,0])
+        # print('h norm',torch.norm(h.reshape(h.shape[0],-1),dim = 1).mean())
+
         h = block(h, ys_BT) #[BT,C,H,W]
         # print('ys_BT', ys_BT.get_device())
         # print('h', h.get_device())
@@ -519,6 +528,10 @@ class ImageDiscriminator(nn.Module):
     print('Param count for D''s initialized parameters: %d' % self.param_count)
 
   def forward(self, x, y=None):
+    # x shape: [B*2*k, 3, H, W] note: B*2 becuase we concatenate real and fake samples
+    # if y.get_device() == 0:
+    #   print('y in D',y)
+    # print('x in D shape', x.shape)
     # Stick x into h for cleaner for loops without flow control
     h = x
     # Loop over blocks
@@ -528,7 +541,10 @@ class ImageDiscriminator(nn.Module):
     # Apply global sum pooling as in SN-GAN
     h = torch.sum(self.activation(h), [2, 3])
     # Get initial class-unconditional output
+    # print('h in D shape',h.shape)
+    # print('h in D norm', torch.norm(h,dim=1).mean())
     out = self.linear(h)
+    # print('out in D',out)
     # print('out', out.get_device())
 
     # print('y.shape image', y.shape)
@@ -536,6 +552,7 @@ class ImageDiscriminator(nn.Module):
     # print('h shape image', h.shape)
     # Get projection of final featureset onto class vectors and add to evidence
     # print('y,embed y, sum y',y.shape,self.embed(y).shape,torch.sum(self.embed(y) * h, 1, keepdim=True).shape)
+    # print('torch sum of embed * h in D',torch.sum(self.embed(y) * h, 1, keepdim=True))
     out = out + torch.sum(self.embed(y) * h, 1, keepdim=True)
     return out
 def init_weights(model, init_type='xavier', gain=0.02):
@@ -756,6 +773,8 @@ class VideoDiscriminator(nn.Module):
     print('Param count for Dv''s initialized parameters: %d' % self.param_count)
 
   def forward(self, x, y=None,tensor_writer=None, iteration=None):
+    # if y.get_device() == 0:
+    #   print('y in Dv',y)
     # Stick x into h for cleaner for loops without flow control
     h = x #[B,T,C,H,W]
     # if tensor_writer != None and iteration % 1000 == 0:
@@ -818,6 +837,9 @@ class G_D(nn.Module):
       # print('z shape in GD:',z.shape)
       # print('G.shared(gy) shape:',self.G.shared(gy).shape)
       G_z = self.G(z, self.G.shared(gy)) #xiaodan: G_z:[B,T,C,H,W]
+      # if G_z.get_device() == 0:
+      #   print('G_z in G_D forward, B=0',G_z[0,:,0,0,0],G_z.get_device())
+      #   print('gy in G_D forward',gy,gy.get_device() )
       # print('Left G in GD')
       # Cast as necessary
       if self.G.fp16 and not self.D.fp16:
@@ -829,8 +851,15 @@ class G_D(nn.Module):
     import utils
     if self.k > 1:
       sampled_G_z,sampled_gy = utils.sample_frames(G_z,gy,self.k) # [B,8,C,H,W], [B,8]
+      # if sampled_G_z.get_device() == 0:
+      #   print('sampled G_z in G_D forward shape',sampled_G_z.shape,sampled_G_z.get_device())
+      #   print('sampled gy in G_D forward shape',sampled_gy.shape,sampled_gy.get_device())
       sampled_G_z = sampled_G_z.contiguous().view(-1,*G_z.shape[2:])# [B*8,C,H,W]
-      sampled_gy = sampled_gy.contiguous().view(-1,*gy.shape[2:]) # [B*8]
+      sampled_gy = sampled_gy.contiguous().view(-1) # [B*8]
+      # if sampled_G_z.get_device() == 0:
+      #   print('sampled G_z in G_D forward, B=0~1',sampled_G_z[:16,0,0,0],sampled_G_z.get_device())
+      #   print('After',sampled_G_z.shape,sampled_gy.shape)
+      #   print('sampled gy in G_D forward (first 16 values)',sampled_gy[:16],sampled_gy.get_device())
       # print('sampled_gy',sampled_gy.shape)
     else:
       sampled_G_z, sampled_gy = G_z.squeeze(), gy
