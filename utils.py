@@ -355,6 +355,10 @@ def prepare_parser():
   parser.add_argument(
     '--log_results_every', type=int, default=500,
     help='Log to Tensorboard every X iterations (default: %(default)s)')
+  parser.add_argument(
+    '--skip_testing', action='store_true', default=False,
+    help='No FID or IS? '
+         '(default: %(default)s)')
 
   ### EMA Stuff ###
   parser.add_argument(

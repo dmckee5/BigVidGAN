@@ -26,6 +26,9 @@ def GAN_training_function(G, D, Dv, GD, z_, y_, ema, state_dict, config):
   elif 'Kinetics' in config['dataset']:
     cache_df = pd.read_csv(config['cache_csv_path'])
     idx_to_classes = {i: label for i, label in enumerate(cache_df['label'].unique())}
+  elif 'C10' in config['dataset']:
+    idx_to_classes = {0:'airplane',1:'automobile',2:'bird',3:'cat',4:'deer',\
+                        5:'dog',6:'frog',7:'horse',8:'ship',9:'truck'}
 
   def train(x, y, tensor_writer = None, iteration=None):
     print('Summation will be taken',config['D_hinge_loss_sum'],'D hinge loss')

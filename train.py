@@ -161,7 +161,8 @@ def run(config):
   # print(loaders[0])
   print('D loss weight:',config['D_loss_weight'])
   # Prepare inception metrics: FID and IS
-  get_inception_metrics = inception_utils.prepare_inception_metrics(config['dataset'], config['parallel'], config['no_fid'])
+  if config['skip_testing'] == False:
+    get_inception_metrics = inception_utils.prepare_inception_metrics(config['dataset'], config['parallel'], config['no_fid'])
 
   # Prepare noise and randomly sampled label arrays
   # Allow for different batch sizes in G
@@ -249,7 +250,7 @@ def run(config):
                                   state_dict, config, experiment_name)
       #xiaodan: Disabled test for now because we don't have inception data
       # Test every specified interval
-      if not (state_dict['itr'] % config['test_every']):
+      if not (state_dict['itr'] % config['test_every']) and config['skip_testing'] == False:
         if config['G_eval_mode']:
           print('Switchin G to eval mode...')
           G.eval()
