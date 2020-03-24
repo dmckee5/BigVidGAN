@@ -6,7 +6,7 @@
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 /usr/bin/python3 train.py \
 --resume \
---experiment_name 'T_into_B' --D_hinge_loss_sum 'after' --Dv_hinge_loss_sum 'after' --T_into_B --D_loss_weight 1.0 \
+--experiment_name 'sanity_check' --D_hinge_loss_sum 'after' --Dv_hinge_loss_sum 'after' --T_into_B --D_loss_weight 1.0 \
 --Dv_no_res \
 --avg_pixel_loss_weight 0. --pixel_loss_kicksin 0 \
 --dataset Kinetics400 --annotation_file '/home/nfs/data/trainlist01.txt' --parallel --shuffle \
@@ -24,7 +24,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 /usr/bin/python3 train.py \
 --dim_z 128 --G_shared --shared_dim 128 \
 --G_ch 64 --D_ch 64 \
 --ema --use_ema --ema_start 1000 \
---test_every 2000 --save_every 100 --num_best_copies 5 --num_save_copies 0 --seed 0 \
+--test_every 2000 --save_every 500 --num_best_copies 5 --num_save_copies 0 --seed 0 \
 --logs_root '/home/ubuntu/nfs/xdu12/dvd-gan/logs/' \
 --data_root '/home/ubuntu/kinetics-400/kinetics/Kinetics_trimmed_videos_train_merge'
 #--data_root '../../data/kinetics-400/train/Kinetics_trimmed_videos_train_merge' \
