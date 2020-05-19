@@ -69,6 +69,7 @@ def run(config):
   # Get loader
   config['drop_last'] = False
   frame_size = utils.imsize_dict[config['dataset']] #112
+  print('Dataset:',config['dataset'],'Frame size:',frame_size)
   loaders = utils.get_video_data_loaders(num_epochs = 1, frame_size = frame_size, **config)
 
   # Load inception net
